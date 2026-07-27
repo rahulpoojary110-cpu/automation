@@ -1,0 +1,8 @@
+node_modules/
+.env
+output/*
+!output/.gitkeep
+*.log
+.DS_Store
+build-targets/
+*.exe
