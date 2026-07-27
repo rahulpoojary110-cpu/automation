@@ -25,35 +25,43 @@ If you can't or don't want to install anything locally, deploy the bundled
 web UI (`server/index.mjs` + `public/index.html`) to a free host. This runs
 Node.js on the host's server, not your machine — you only need a browser.
 
-**Deploy to Render (free tier), entirely through your browser:**
+**Deploy to Railway (free trial credit), entirely through your browser.**
+Railway builds this repo using the included `Dockerfile`, which sidesteps
+platform auto-detection guesswork entirely:
 
 1. Push/fork this repo to your own GitHub account (already done if you're
    working from this branch).
-2. Go to [dashboard.render.com](https://dashboard.render.com) → sign in with
-   GitHub → **New** → **Web Service** → pick this repo.
-   (Render auto-detects `render.yaml` in this repo, which sets the build/start
-   commands for you — or set them manually: build `npm install`, start
-   `npm run web`.)
-3. Under **Environment**, add `SITE_PASSWORD` set to a password of your
-   choosing. This gates *usage* (not just page load) — skipping it means
-   anyone who finds the URL can run the agent, which executes shell commands
-   on your server, so set one before sharing the link.
-4. Click **Deploy**. Render gives you a URL like
-   `https://deck-sop-agent-xxxx.onrender.com`.
-5. Open that URL, enter the site password if you set one, paste your
+2. Go to [railway.com](https://railway.com) → **Login** with GitHub.
+3. **New Project** → **Deploy from GitHub repo** → authorize Railway to see
+   your repos if asked → pick `automation` (this repo).
+4. Railway finds the `Dockerfile` and builds automatically — no build/start
+   command to configure. Watch the **Deployments** tab; wait for it to say
+   "Success".
+5. **This step is easy to miss and is why a Railway deploy can look "not
+   running" even after a successful build:** open the service → **Settings**
+   → **Networking** → click **Generate Domain**. Railway does not expose a
+   public URL by default. This gives you one like
+   `https://automation-production-xxxx.up.railway.app`.
+6. Still in **Settings**, go to **Variables** → add `SITE_PASSWORD` set to a
+   password of your choosing. This gates *usage* (not just page load) —
+   skipping it means anyone who finds the URL can run the agent, which
+   executes shell commands on your server, so set one before sharing the
+   link. Adding a variable triggers a redeploy — wait for it to finish.
+7. Open the domain from step 5, enter the site password, paste your
    Anthropic API key (stays in your browser's local storage, sent per
    request, never stored server-side), describe your deck, and click
    **Build deck**. Watch it work in the log panel; download the `.pptx` when
    it finishes.
 
-Any Node-hosting PaaS works the same way (Railway, Fly.io, etc.) — the app
-just needs `npm install` + `npm run web`, and a writable filesystem for the
-generated files. Free tiers on these platforms typically spin down when
-idle, so the first request after a while can take ~30s to wake up.
-
-If you'd rather deploy via Docker (e.g. Railway/Fly.io "deploy from
-Dockerfile"), use the included `Dockerfile` — see the note below on why it
-matters.
+Render, Fly.io, and other Node-hosting PaaS work the same way in principle
+(`npm install` + `npm run web`, or the `Dockerfile`, plus a writable
+filesystem for generated files) — `render.yaml` is still in this repo if you
+want to try Render instead. The two most common "deployed but nothing
+happens" causes on any of these platforms are (a) no public domain/URL was
+generated — some platforms require an explicit step for this, as in Railway
+step 5 above — and (b) the build used a different command than
+`npm run web` / the Dockerfile. Check the platform's deploy logs first; they
+usually say directly which of the two it is.
 
 **Troubleshooting: "agent process ended without completing a turn" /
 permission errors mentioning root.** The Claude Agent SDK refuses to run
