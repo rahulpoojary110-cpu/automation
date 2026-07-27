@@ -26,12 +26,12 @@ Node.js, no build step, nothing that can fail to build. It's one HTML file
 plus one vendored JS file (`docs/pptxgen.bundle.js`) that runs entirely in
 your browser tab:
 
-- You paste your Anthropic API key into the page (saved in your browser's
-  local storage only).
-- The page calls the Anthropic API **directly from your browser**
-  (`api.anthropic.com`, using the officially-supported
-  `anthropic-dangerous-direct-browser-access` header for exactly this
-  "bring your own key" pattern) and asks Claude to write a `pptxgenjs`
+- You paste a free **Google Gemini** API key into the page (saved in your
+  browser's local storage only) — this version uses Gemini rather than
+  Claude specifically so it can run on Gemini's genuinely free tier
+  (no billing/credit card), since Anthropic's API has no free tier.
+- The page calls the Gemini API **directly from your browser**
+  (`generativelanguage.googleapis.com`) and asks it to write a `pptxgenjs`
   script following the deck-sop format.
 - That script runs immediately in your browser tab using the vendored
   `pptxgenjs` library, and triggers a normal file download for the `.pptx`.
@@ -40,6 +40,15 @@ There is no backend at all, so there's nothing to deploy wrong — this is
 the option to use after the Render/Railway build failures, since a static
 host either serves the files or it doesn't; there's no build pipeline to
 break.
+
+**Get a free API key:** go to [aistudio.google.com](https://aistudio.google.com/apikey),
+sign in with any Google account, create a key — no credit card required.
+The free tier (as of this writing, `gemini-2.5-flash`) has a modest daily
+request limit, which is plenty for building decks one at a time.
+Google renames/retires model ids fairly often; the page has a **Model**
+field (defaults to `gemini-2.5-flash`) you can edit directly if the default
+ever stops working — check aistudio.google.com for the current free-tier
+flash model name.
 
 **Host it for free with GitHub Pages (2 minutes, no new account needed —
 uses the GitHub account this repo is already on):**
@@ -69,6 +78,12 @@ server-side.
 *own* requests — there's no shared server, so no shared bill and no
 password gate needed. Anyone who opens the URL can use the page, but only
 with a key they provide themselves.
+
+**Quality note:** `gemini-2.5-flash` is a small, fast, free-tier model —
+it follows the format instructions well for straightforward slides, but is
+less consistent than Claude on complex/unusual layouts. If a build comes
+out wrong, rephrasing the request or just clicking **Build deck** again
+often fixes it.
 
 ## Run it as a website with a backend (alternative — has more moving parts)
 
@@ -225,9 +240,10 @@ Finished `.pptx` files land in `./output/`.
   option above.
 - `docs/index.html` + `docs/pptxgen.bundle.js` — the static, no-backend
   version for GitHub Pages. Architecturally different from everything else
-  here: no Claude Agent SDK, no Bash tool, no server. It calls the plain
-  Anthropic Messages API directly from the browser and asks for a
-  `pptxgenjs` script as the entire response, then runs that script
+  here: no Claude Agent SDK, no Bash tool, no server, and no Anthropic API
+  either — it calls Google's Gemini API directly from the browser (chosen
+  specifically for its free tier) and asks for a `pptxgenjs` script as the
+  entire response, then runs that script
   client-side against the vendored browser build of `pptxgenjs`
   (`node_modules/pptxgenjs/dist/pptxgen.bundle.js`, copied in — note it's
   specifically the `.bundle.js` build, not `.min.js`, because only the

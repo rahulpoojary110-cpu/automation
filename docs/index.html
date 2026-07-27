@@ -18,7 +18,7 @@
   .sub { color: #6b6b5f; margin: 0 0 1.5rem; font-size: .9rem; }
   .card { background: #fff; border: 1px solid var(--gray); border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
   label { display: block; font-weight: 600; font-size: .85rem; margin-bottom: .35rem; }
-  input[type=password], textarea {
+  input[type=password], input[type=text], textarea {
     width: 100%; font: inherit; padding: .6rem .7rem;
     border: 1px solid var(--gray); border-radius: 6px; background: var(--cream); color: var(--green);
   }
@@ -43,12 +43,15 @@
 <body>
 <div class="wrap">
   <h1>deck-sop-agent</h1>
-  <p class="sub">Static, no-backend version. Runs entirely in this browser tab — your API key never leaves your machine except to talk to api.anthropic.com directly.</p>
+  <p class="sub">Static, no-backend version. Runs entirely in this browser tab — your API key never leaves your machine except to talk to generativelanguage.googleapis.com directly.</p>
 
   <div class="card">
-    <label for="apiKey">Anthropic API key</label>
-    <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" />
-    <div class="hint">Saved only in this browser's local storage. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</div>
+    <label for="apiKey">Google AI Studio (Gemini) API key</label>
+    <input type="password" id="apiKey" placeholder="AIza..." autocomplete="off" />
+    <div class="hint">Saved only in this browser's local storage. Get a free key (no credit card) at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>.</div>
+    <label for="model" style="margin-top:.75rem;">Model</label>
+    <input type="text" id="model" value="gemini-2.5-flash" autocomplete="off" />
+    <div class="hint">Free-tier model id. If this stops working (Google renames/retires models fairly often), check <a href="https://aistudio.google.com" target="_blank" rel="noopener">aistudio.google.com</a> for the current free-tier flash model name and paste it here.</div>
   </div>
 
   <div class="card">
@@ -73,12 +76,15 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const apiKeyEl = $('apiKey');
+const modelEl = $('model');
 const promptEl = $('prompt');
 const buildBtn = $('buildBtn');
 const logEl = $('log');
 
 apiKeyEl.value = localStorage.getItem('deckAgentApiKey') || '';
 apiKeyEl.addEventListener('change', () => localStorage.setItem('deckAgentApiKey', apiKeyEl.value));
+modelEl.value = localStorage.getItem('deckAgentModel') || modelEl.value;
+modelEl.addEventListener('change', () => localStorage.setItem('deckAgentModel', modelEl.value));
 
 $('clearBtn').addEventListener('click', () => {
   logEl.textContent = '';
@@ -122,29 +128,27 @@ BROWSER EXECUTION CONTRACT (critical, follow exactly):
 
 buildBtn.addEventListener('click', async () => {
   const apiKey = apiKeyEl.value.trim();
+  const model = modelEl.value.trim() || 'gemini-2.5-flash';
   const prompt = promptEl.value.trim();
-  if (!apiKey) return alert('Paste your Anthropic API key first.');
+  if (!apiKey) return alert('Paste your Gemini API key first.');
   if (!prompt) return alert('Describe what you want built.');
   if (typeof PptxGenJS === 'undefined') return alert('pptxgen.bundle.js failed to load — check the browser console.');
 
   buildBtn.disabled = true;
   logEl.textContent = '';
-  appendLog('Asking Claude to write the deck code...');
+  appendLog('Asking Gemini to write the deck code...');
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
+        'x-goog-api-key': apiKey,
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-5',
-        max_tokens: 8192,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: prompt }],
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 8192 },
       }),
     });
 
@@ -154,7 +158,18 @@ buildBtn.addEventListener('click', async () => {
       return;
     }
 
-    const text = (data.content || []).map((b) => b.text || '').join('');
+    const candidate = data.candidates?.[0];
+    if (!candidate) {
+      const blockReason = data.promptFeedback?.blockReason;
+      appendLog('No response from the model' + (blockReason ? ` (blocked: ${blockReason})` : '') + '. Raw response:', 'err');
+      appendLog(JSON.stringify(data, null, 2));
+      return;
+    }
+    if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+      appendLog(`Note: response finished with reason "${candidate.finishReason}" (may be truncated or blocked).`);
+    }
+
+    const text = (candidate.content?.parts || []).map((p) => p.text || '').join('');
     const match = text.match(/```(?:javascript|js)?\s*([\s\S]*?)```/);
     if (!match) {
       appendLog('Could not find a code block in the response. Raw response:', 'err');
