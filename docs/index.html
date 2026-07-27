@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>deck-sop-agent (static)</title>
+<script src="pptxgen.bundle.js"></script>
+<style>
+  :root { --green:#13352B; --cream:#F7F4EF; --gold:#C8A028; --gray:#E8E4DC; color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Calibri, Arial, sans-serif;
+    background: var(--cream); color: var(--green);
+    display: flex; justify-content: center; padding: 2rem 1rem;
+  }
+  .wrap { width: 100%; max-width: 780px; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .sub { color: #6b6b5f; margin: 0 0 1.5rem; font-size: .9rem; }
+  .card { background: #fff; border: 1px solid var(--gray); border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
+  label { display: block; font-weight: 600; font-size: .85rem; margin-bottom: .35rem; }
+  input[type=password], textarea {
+    width: 100%; font: inherit; padding: .6rem .7rem;
+    border: 1px solid var(--gray); border-radius: 6px; background: var(--cream); color: var(--green);
+  }
+  textarea { min-height: 140px; resize: vertical; }
+  button {
+    background: var(--green); color: #fff; border: none; border-radius: 6px;
+    padding: .65rem 1.2rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.secondary { background: transparent; color: var(--green); border: 1px solid var(--gray); }
+  .hint { font-size: .78rem; color: #8a8a7a; margin-top: .35rem; }
+  #log {
+    background: var(--green); color: #e8e8e0; font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: .82rem; border-radius: 8px; padding: 1rem; max-height: 420px; overflow-y: auto;
+    white-space: pre-wrap; display: none;
+  }
+  #log .err { color: #ff9c8f; }
+  #log .ok { color: #b7e3a8; }
+  footer { font-size: .75rem; color: #8a8a7a; text-align: center; margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>deck-sop-agent</h1>
+  <p class="sub">Static, no-backend version. Runs entirely in this browser tab — your API key never leaves your machine except to talk to api.anthropic.com directly.</p>
+
+  <div class="card">
+    <label for="apiKey">Anthropic API key</label>
+    <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" />
+    <div class="hint">Saved only in this browser's local storage. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</div>
+  </div>
+
+  <div class="card">
+    <label for="prompt">What do you want to build?</label>
+    <textarea id="prompt" placeholder="Build a P1 snapshot slide titled 'Q3 Launch Brief'. Stat cards: ...&#10;What it is / the data / the charts / the layout pattern / special rules."></textarea>
+    <div class="hint">Optional: paste a custom format block above your request to override the default HiveMinds colours/fonts for this build only.</div>
+    <div style="margin-top:.75rem; display:flex; gap:.5rem;">
+      <button id="buildBtn">Build deck</button>
+      <button id="clearBtn" class="secondary" type="button">Clear log</button>
+    </div>
+  </div>
+
+  <div id="log"></div>
+
+  <footer>
+    No server, no build step — this page is the whole app. There's no visual
+    preview step here (unlike the Node/CLI version, which renders a JPG via
+    LibreOffice) — the file downloads directly; open it in PowerPoint to check it.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const apiKeyEl = $('apiKey');
+const promptEl = $('prompt');
+const buildBtn = $('buildBtn');
+const logEl = $('log');
+
+apiKeyEl.value = localStorage.getItem('deckAgentApiKey') || '';
+apiKeyEl.addEventListener('change', () => localStorage.setItem('deckAgentApiKey', apiKeyEl.value));
+
+$('clearBtn').addEventListener('click', () => {
+  logEl.textContent = '';
+  logEl.style.display = 'none';
+});
+
+function appendLog(text, cls) {
+  logEl.style.display = 'block';
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = text;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+const SYSTEM_PROMPT = `You are a deck-building assistant that outputs pptxgenjs code to run directly in a browser (not Node.js). Follow the HiveMinds house format below exactly unless the user's request includes its own format block. There is no human available for a handshake question, so silently use this default format.
+
+LOCKED FORMAT:
+- Slide size 13.333in x 7.5in (LAYOUT_WIDE): pres.defineLayout({name:'LAYOUT_WIDE', width:13.333, height:7.5}); pres.layout='LAYOUT_WIDE';
+- Palette: green #13352B (rail, titles, dark bars), cream #F7F4EF (canvas bg), gold #C8A028 (subtitle italic, accents, primary chart fill), goldDark #493000 (sidebar small headings), indigo #3B4CA6 (secondary chart fill), white #FFFFFF (cards), gray #E8E4DC (borders)
+- Calibri throughout. Title 28-32pt bold #13352B. Subtitle 14-16pt italic #C8A028 directly under title.
+- Every content slide: left sidebar rail x:0 w:2.0 h:7.5 fill #13352B with a vertical category label (white bold ~24pt, y~2.6-4.4) and a source citation bottom-left (white bold 9pt, y:6.9 w:1.7 h:0.5). Main canvas fill #F7F4EF. White placeholder rect top-right (x:11.95,y:0.2,w:1.2,h:0.8) for client logo and bottom-right (x:11.95,y:6.85,w:1.2,h:0.5) for HiveMinds logo, both fill #FFFFFF border #E8E4DC 1pt — leave empty, never put text/images in them.
+
+5 SLIDE PATTERNS (pick the one matching the data shape, or build custom keeping the rail/title/palette rules above):
+- P1 Snapshot: 3 stat cards in a row (gold top strip + white card + big number 40pt + label) plus 1-2 supporting blocks below (a text/roadmap card, a mini bar chart card). Sidebar may also carry CHANNELS / KEY COMPETITORS bullet lists above/below the category label.
+- P2 Stacked bar + donut callouts: one wide white chart panel with a stacked column chart (barDir:'col', barGrouping:'stacked', first series = base/larger segment), plus 1-2 circular callouts on the right (ellipse shape + big % text + label, fill #13352B border gold 3pt).
+- P3 Stat cards + dual chart: 3 stat cards across the top, then two charts side by side below (e.g. vertical column chart + horizontal bar chart).
+- P4 Donut + table: doughnut chart (holeSize:60 minimum, chartColors from a 6-color set like ['F0AE24','B07CC6','EE3F8E','EC5B2C','3B4CA6','A6A6A6'] for 4+ series) with a separate centered text box for the total (NOT part of the chart), a manual legend (small ellipses + text, pptxgenjs auto-legend wraps badly), and a comparison table on the right via addTable.
+- P5 Data table + insight panel: wide addTable on the left (styled header row: fill #13352B, white bold text; body rows: color #13352B, border gray), narrow insight panel on the right with a bold heading and 1-2 stacked colored callout cards (header strip in a palette color + white bold text, body card white with colored border).
+
+CHART RULES:
+- Always specify barDir explicitly: 'bar' for horizontal/ranking, 'col' for vertical/time-series. Never leave it to the default.
+- Always set: chartColors (from the palette), catAxisLabelFontFace:'Calibri', showValue:true, dataLabelFontFace:'Calibri', dataLabelFontBold:true, dataLabelColor (white if inside a dark/colored bar, else #13352B), valAxisHidden:true, showLegend only if 2+ series (legendPos:'t', legendFontFace:'Calibri').
+- Stacked bars: barGrouping:'stacked' AND barDir:'col' both required. First series in the data array = bottom of stack.
+- Donuts: holeSize:60+, always a separate centered addText for the total, never rely on pptxgenjs's built-in legend.
+
+BROWSER EXECUTION CONTRACT (critical, follow exactly):
+- \`PptxGenJS\` is already a global constructor loaded on the page (browser bundle) — do NOT use require() or import.
+- Write: \`const pres = new PptxGenJS();\` then build slide(s), then end with \`pres.writeFile({ fileName: '<short-kebab-case-name>.pptx' });\` — in the browser this triggers an automatic file download, no filesystem access happens or is needed.
+- Output ONLY one fenced code block, language "javascript", containing the complete runnable script and nothing else — no prose before or after, no explanations. If you are missing critical data (exact numbers/labels the user didn't give you), make a reasonable placeholder-free choice and proceed rather than asking — there is no way for you to ask a follow-up in this flow.`;
+
+buildBtn.addEventListener('click', async () => {
+  const apiKey = apiKeyEl.value.trim();
+  const prompt = promptEl.value.trim();
+  if (!apiKey) return alert('Paste your Anthropic API key first.');
+  if (!prompt) return alert('Describe what you want built.');
+  if (typeof PptxGenJS === 'undefined') return alert('pptxgen.bundle.js failed to load — check the browser console.');
+
+  buildBtn.disabled = true;
+  logEl.textContent = '';
+  appendLog('Asking Claude to write the deck code...');
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 8192,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      appendLog('API error: ' + (data?.error?.message || res.statusText), 'err');
+      return;
+    }
+
+    const text = (data.content || []).map((b) => b.text || '').join('');
+    const match = text.match(/```(?:javascript|js)?\s*([\s\S]*?)```/);
+    if (!match) {
+      appendLog('Could not find a code block in the response. Raw response:', 'err');
+      appendLog(text);
+      return;
+    }
+    const code = match[1];
+    appendLog('Got code, running it in this tab...');
+
+    try {
+      const runner = new Function('PptxGenJS', code);
+      runner(PptxGenJS);
+      appendLog('Done — check your browser downloads.', 'ok');
+    } catch (execErr) {
+      appendLog('Error running the generated code: ' + execErr.message, 'err');
+      appendLog('--- generated code ---\n' + code);
+    }
+  } catch (err) {
+    appendLog('Error: ' + err.message, 'err');
+  } finally {
+    buildBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

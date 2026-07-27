@@ -19,11 +19,65 @@ You describe a slide (or several), and the agent:
 The brand format (colours, fonts, layout, logo placeholders) is locked into
 the skill, so you never have to re-paste it — just describe the content.
 
-## Run it as a website (nothing to install, on any device)
+## Static version: free-hosted like any HTML page (recommended)
 
-If you can't or don't want to install anything locally, deploy the bundled
-web UI (`server/index.mjs` + `public/index.html`) to a free host. This runs
-Node.js on the host's server, not your machine — you only need a browser.
+`docs/index.html` is a completely different, simpler build: no server, no
+Node.js, no build step, nothing that can fail to build. It's one HTML file
+plus one vendored JS file (`docs/pptxgen.bundle.js`) that runs entirely in
+your browser tab:
+
+- You paste your Anthropic API key into the page (saved in your browser's
+  local storage only).
+- The page calls the Anthropic API **directly from your browser**
+  (`api.anthropic.com`, using the officially-supported
+  `anthropic-dangerous-direct-browser-access` header for exactly this
+  "bring your own key" pattern) and asks Claude to write a `pptxgenjs`
+  script following the deck-sop format.
+- That script runs immediately in your browser tab using the vendored
+  `pptxgenjs` library, and triggers a normal file download for the `.pptx`.
+
+There is no backend at all, so there's nothing to deploy wrong — this is
+the option to use after the Render/Railway build failures, since a static
+host either serves the files or it doesn't; there's no build pipeline to
+break.
+
+**Host it for free with GitHub Pages (2 minutes, no new account needed —
+uses the GitHub account this repo is already on):**
+
+1. On GitHub, open this repo → **Settings** → **Pages** (left sidebar,
+   under "Code and automation").
+2. Under **Build and deployment** → **Source**, choose **Deploy from a
+   branch**.
+3. Under **Branch**, pick this branch (`claude/ai-agent-deck-sop-mfqvqf`, or
+   `main` after merging) and folder **`/docs`**, then **Save**.
+4. GitHub shows a URL at the top of that same Pages settings page once it's
+   live, like `https://rahulpoojary110-cpu.github.io/automation/` — usually
+   ready within a minute. Bookmark it.
+5. Open the URL, paste your API key, describe your deck, click **Build
+   deck** — the `.pptx` downloads straight to your device.
+
+**What's different from the CLI/web-server versions:** this version can't
+run shell commands, so it can't render a visual preview image the way the
+Node-based skill workflow does (no LibreOffice step) — you just get the
+`.pptx` directly and open it in PowerPoint to check it. It also can't do
+things outside pure pptxgenjs code (no arbitrary file/shell access), which
+in practice doesn't matter for building decks — it's the same 5 patterns
+and the same locked format, just generated and run client-side instead of
+server-side.
+
+**Cost/security note:** each visitor uses their *own* pasted key for their
+*own* requests — there's no shared server, so no shared bill and no
+password gate needed. Anyone who opens the URL can use the page, but only
+with a key they provide themselves.
+
+## Run it as a website with a backend (alternative — has more moving parts)
+
+If you specifically want the fuller agent (real shell access, visual
+previews, multi-file output) rather than the static version above, deploy
+the bundled web UI (`server/index.mjs` + `public/index.html`) to a free
+host. This runs Node.js on the host's server, not your machine — you only
+need a browser to use it, but there's a real build/deploy step involved,
+which is what failed on Render and Railway.
 
 **Deploy to Railway (free trial credit), entirely through your browser.**
 Railway builds this repo using the included `Dockerfile`, which sidesteps
@@ -167,18 +221,29 @@ Finished `.pptx` files land in `./output/`.
   binary into the bundle.
 - `server/index.mjs` + `public/index.html` — the hosted web version: an
   Express server exposing a streaming `/api/build` endpoint (Server-Sent
-  Events) and a single-page browser UI, for the "run it as a website" option
-  above.
+  Events) and a single-page browser UI, for the "website with a backend"
+  option above.
+- `docs/index.html` + `docs/pptxgen.bundle.js` — the static, no-backend
+  version for GitHub Pages. Architecturally different from everything else
+  here: no Claude Agent SDK, no Bash tool, no server. It calls the plain
+  Anthropic Messages API directly from the browser and asks for a
+  `pptxgenjs` script as the entire response, then runs that script
+  client-side against the vendored browser build of `pptxgenjs`
+  (`node_modules/pptxgenjs/dist/pptxgen.bundle.js`, copied in — note it's
+  specifically the `.bundle.js` build, not `.min.js`, because only the
+  bundle inlines JSZip; `pptxgenjs` depends on it and the minified build
+  expects it as a separate global that isn't there).
 
-All of these call the same Claude Agent SDK `query()`, enabling only the
-`deck-sop` skill and the tools it needs (Bash, Read, Write, Edit, Glob,
-Grep).
-
-Because it runs headless with `permissionMode: 'bypassPermissions'`, the
-agent executes shell commands (npm, node, soffice) without prompting for
-approval each time — that's what makes it usable as a one-shot CLI instead
-of an interactive chat. Only run it against prompts you trust, the same way
-you'd treat any automation with shell access.
+The CLI/desktop/server versions all call the Claude Agent SDK's `query()`,
+enabling only the `deck-sop` skill and the tools it needs (Bash, Read,
+Write, Edit, Glob, Grep). Because they run headless with
+`permissionMode: 'bypassPermissions'`, the agent executes shell commands
+(npm, node, soffice) without prompting for approval each time — that's what
+makes them usable as one-shot tools instead of an interactive chat. Only
+run them against prompts you trust, the same way you'd treat any automation
+with shell access. The static GitHub Pages version has no shell access at
+all — the only code that runs is the pptxgenjs script Claude writes,
+executed in your own browser tab.
 
 ## Building a single-file .exe (no Node.js required on the target machine)
 
