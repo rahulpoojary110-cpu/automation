@@ -36,6 +36,12 @@
     font-size: .78rem; cursor: pointer; font-family: ui-monospace, Menlo, Consolas, monospace;
   }
   .modelChip:hover { background: var(--gold); color: #fff; border-color: var(--gold); }
+  .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; }
+  .tab {
+    background: transparent; color: var(--green); border: 1px solid var(--gray);
+    border-radius: 8px; padding: .55rem 1rem; font-size: .88rem;
+  }
+  .tab.active { background: var(--green); color: #fff; border-color: var(--green); }
   #log {
     background: var(--green); color: #e8e8e0; font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: .82rem; border-radius: 8px; padding: 1rem; max-height: 420px; overflow-y: auto;
@@ -43,6 +49,13 @@
   }
   #log .err { color: #ff9c8f; }
   #log .ok { color: #b7e3a8; }
+  #suggestions {
+    display: none; background: #fff; border: 1px solid var(--gold);
+    border-left: 5px solid var(--gold); border-radius: 8px; padding: 1rem 1.25rem; margin-top: 1rem;
+  }
+  #suggestions h3 { margin: 0 0 .5rem; font-size: 1rem; }
+  #suggestions .body { white-space: pre-wrap; font-size: .88rem; line-height: 1.5; }
+  input[type=file] { font: inherit; font-size: .85rem; }
   footer { font-size: .75rem; color: #8a8a7a; text-align: center; margin-top: 1.5rem; }
 </style>
 </head>
@@ -64,17 +77,48 @@
     <div id="modelList" style="display:none; margin-top:.5rem;"></div>
   </div>
 
-  <div class="card">
-    <label for="prompt">What do you want to build?</label>
-    <textarea id="prompt" placeholder="Build a P1 snapshot slide titled 'Q3 Launch Brief'. Stat cards: ...&#10;What it is / the data / the charts / the layout pattern / special rules."></textarea>
-    <div class="hint">Optional: paste a custom format block above your request to override the default HiveMinds colours/fonts for this build only.</div>
-    <div style="margin-top:.75rem; display:flex; gap:.5rem;">
-      <button id="buildBtn">Build deck</button>
-      <button id="clearBtn" class="secondary" type="button">Clear log</button>
+  <div class="tabs">
+    <button class="tab active" id="tabBuild" type="button">Build a new deck</button>
+    <button class="tab" id="tabReformat" type="button">Reformat an existing deck</button>
+  </div>
+
+  <div id="panelBuild">
+    <div class="card">
+      <label for="prompt">What do you want to build?</label>
+      <textarea id="prompt" placeholder="Build a P1 snapshot slide titled 'Q3 Launch Brief'. Stat cards: ...&#10;What it is / the data / the charts / the layout pattern / special rules."></textarea>
+      <div class="hint">Optional: paste a custom format block above your request to override the default HiveMinds colours/fonts for this build only. One slide at a time is most reliable.</div>
+      <div style="margin-top:.75rem; display:flex; gap:.5rem;">
+        <button id="buildBtn">Build deck</button>
+        <button id="clearBtn" class="secondary" type="button">Clear log</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="panelReformat" style="display:none;">
+    <div class="card">
+      <label for="pptxFile">Upload an existing .pptx</label>
+      <input type="file" id="pptxFile" accept=".pptx" />
+      <div class="hint">Your file is read <strong>in this browser tab only</strong> — the file itself is never uploaded anywhere. Only the text/table/chart values extracted from it are sent to Gemini so it can lay them out.</div>
+      <div id="fileInfo" class="hint" style="display:none;"></div>
+
+      <label for="reformatNotes" style="margin-top:.9rem;">Anything specific to change? (optional)</label>
+      <textarea id="reformatNotes" style="min-height:80px;" placeholder="e.g. category label for the sidebar rail, the source citation to use, or 'keep slide order exactly as-is'"></textarea>
+
+      <div style="margin-top:.75rem; display:flex; gap:.5rem; flex-wrap:wrap;">
+        <button id="reformatBtn">Reformat into HiveMinds format</button>
+        <button id="previewExtractBtn" class="secondary" type="button">Preview extracted data</button>
+        <button id="clearBtn2" class="secondary" type="button">Clear log</button>
+      </div>
+      <div class="hint" style="margin-top:.6rem;">
+        The data is preserved as-is — text, numbers, table cells and chart values are carried over verbatim.
+        Anything that <em>should</em> change but would alter your data (too many bullets, wrong chart type,
+        missing source) is reported as a suggestion instead of being applied.
+      </div>
     </div>
   </div>
 
   <div id="log"></div>
+  <div id="suggestions"><h3>Suggestions (not applied — your data was left as-is)</h3><div class="body"></div></div>
 
   <footer>
     No server, no build step — this page is the whole app. There's no visual
@@ -90,9 +134,11 @@ const modelEl = $('model');
 const promptEl = $('prompt');
 const buildBtn = $('buildBtn');
 const logEl = $('log');
+const suggestionsEl = $('suggestions');
 
 apiKeyEl.value = localStorage.getItem('deckAgentApiKey') || '';
 apiKeyEl.addEventListener('change', () => localStorage.setItem('deckAgentApiKey', apiKeyEl.value));
+
 // Model ids Google has retired — ignore a stale saved value so the current
 // default in the markup wins instead of a dead id from a previous visit.
 const RETIRED_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
@@ -104,11 +150,35 @@ if (savedModel && !RETIRED_MODELS.includes(savedModel)) {
 }
 modelEl.addEventListener('change', () => localStorage.setItem('deckAgentModel', modelEl.value));
 
-$('clearBtn').addEventListener('click', () => {
+function clearOutput() {
   logEl.textContent = '';
   logEl.style.display = 'none';
+  suggestionsEl.style.display = 'none';
+  suggestionsEl.querySelector('.body').textContent = '';
+}
+$('clearBtn').addEventListener('click', clearOutput);
+$('clearBtn2').addEventListener('click', clearOutput);
+
+function appendLog(text, cls) {
+  logEl.style.display = 'block';
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = text;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ---------- tabs ----------
+$('tabBuild').addEventListener('click', () => {
+  $('tabBuild').classList.add('active'); $('tabReformat').classList.remove('active');
+  $('panelBuild').style.display = ''; $('panelReformat').style.display = 'none';
+});
+$('tabReformat').addEventListener('click', () => {
+  $('tabReformat').classList.add('active'); $('tabBuild').classList.remove('active');
+  $('panelReformat').style.display = ''; $('panelBuild').style.display = 'none';
 });
 
+// ---------- model discovery ----------
 $('listModelsBtn').addEventListener('click', async () => {
   const apiKey = apiKeyEl.value.trim();
   const listEl = $('modelList');
@@ -161,18 +231,8 @@ $('listModelsBtn').addEventListener('click', async () => {
   }
 });
 
-function appendLog(text, cls) {
-  logEl.style.display = 'block';
-  const div = document.createElement('div');
-  if (cls) div.className = cls;
-  div.textContent = text;
-  logEl.appendChild(div);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-const SYSTEM_PROMPT = `You are a deck-building assistant that outputs pptxgenjs code to run directly in a browser (not Node.js). Follow the HiveMinds house format below exactly unless the user's request includes its own format block. There is no human available for a handshake question, so silently use this default format.
-
-LOCKED FORMAT:
+// ---------- shared format spec ----------
+const FORMAT_SPEC = `LOCKED FORMAT:
 - Slide size 13.333in x 7.5in (LAYOUT_WIDE): pres.defineLayout({name:'LAYOUT_WIDE', width:13.333, height:7.5}); pres.layout='LAYOUT_WIDE';
 - Palette: green #13352B (rail, titles, dark bars), cream #F7F4EF (canvas bg), gold #C8A028 (subtitle italic, accents, primary chart fill), goldDark #493000 (sidebar small headings), indigo #3B4CA6 (secondary chart fill), white #FFFFFF (cards), gray #E8E4DC (borders)
 - Calibri throughout. Title 28-32pt bold #13352B. Subtitle 14-16pt italic #C8A028 directly under title.
@@ -189,15 +249,88 @@ CHART RULES:
 - Always specify barDir explicitly: 'bar' for horizontal/ranking, 'col' for vertical/time-series. Never leave it to the default.
 - Always set: chartColors (from the palette), catAxisLabelFontFace:'Calibri', showValue:true, dataLabelFontFace:'Calibri', dataLabelFontBold:true, dataLabelColor (white if inside a dark/colored bar, else #13352B), valAxisHidden:true, showLegend only if 2+ series (legendPos:'t', legendFontFace:'Calibri').
 - Stacked bars: barGrouping:'stacked' AND barDir:'col' both required. First series in the data array = bottom of stack.
-- Donuts: holeSize:60+, always a separate centered addText for the total, never rely on pptxgenjs's built-in legend.
+- Donuts: holeSize:60+, always a separate centered addText for the total, never rely on pptxgenjs's built-in legend.`;
 
-BROWSER EXECUTION CONTRACT (critical, follow exactly):
+const BROWSER_CONTRACT = `BROWSER EXECUTION CONTRACT (critical, follow exactly):
 - \`PptxGenJS\` is already a global constructor loaded on the page (browser bundle) — do NOT use require() or import.
 - Write: \`const pres = new PptxGenJS();\` then build slide(s), then end with \`pres.writeFile({ fileName: '<short-kebab-case-name>.pptx' });\` — in the browser this triggers an automatic file download, no filesystem access happens or is needed.
+- Output budget is limited and a truncated script produces NO file at all, so write compactly: no comments, no banner separators, no blank-line padding. Reuse short local variables/loops for repeated elements (stat cards, callouts, table rows) instead of repeating near-identical blocks. Finishing the script matters far more than readability.`;
+
+const SYSTEM_PROMPT = `You are a deck-building assistant that outputs pptxgenjs code to run directly in a browser (not Node.js). Follow the HiveMinds house format below exactly unless the user's request includes its own format block. There is no human available for a handshake question, so silently use this default format.
+
+${FORMAT_SPEC}
+
+${BROWSER_CONTRACT}
 - Output ONLY one fenced code block, language "javascript", containing the complete runnable script and nothing else — no prose before or after, no explanations. If you are missing critical data (exact numbers/labels the user didn't give you), make a reasonable placeholder-free choice and proceed rather than asking — there is no way for you to ask a follow-up in this flow.
-- Output budget is limited and a truncated script produces NO file at all, so write compactly: no comments, no banner separators, no blank-line padding. Reuse short local variables/loops for repeated elements (stat cards, callouts, table rows) instead of repeating near-identical blocks. Finishing the script matters far more than readability.
 - If the user asks for more slides than you can complete within the budget, build as many complete slides as you can and still finish with the writeFile call, rather than leaving the script unterminated.`;
 
+const REFORMAT_SYSTEM_PROMPT = `You are RESTYLING an existing PowerPoint deck into the HiveMinds house format. You are NOT authoring new content.
+
+THE ONE ABSOLUTE RULE — DO NOT CHANGE THE DATA:
+- Reproduce every piece of text, every number, every table cell and every chart value EXACTLY as extracted, character for character. Do not round numbers, change units, fix spelling, reword phrasing, translate, expand abbreviations, or "improve" anything.
+- Do not invent data that is not in the extract. Do not drop data that is in it. Do not merge or split slides. Keep the original slide count and slide order.
+- Keep category/series order within charts and row/column order within tables exactly as extracted.
+- If something is ugly, wrong, redundant, or would be better presented differently — DO NOT fix it in the code. Report it in the SUGGESTIONS section instead.
+
+WHAT YOU MAY CHANGE: only visual presentation — colours, fonts, sizes, positions, which layout pattern the existing content is arranged into, chart styling, and adding the standard rail/title/logo-placeholder chrome.
+
+${FORMAT_SPEC}
+
+Mapping guidance: choose whichever of the 5 patterns best fits each slide's existing content shape. If a slide's content fits none of them, lay it out cleanly using the same palette, typography, rail and logo placeholders. Use the slide's own existing title text as the title. If the user supplied a sidebar category label or source citation, use it on every slide; otherwise derive the category label from the slide's own title text and leave the source citation as the deck's own source text if one appears in the extract (never invent a source).
+
+${BROWSER_CONTRACT}
+
+OUTPUT FORMAT (exactly this, in this order):
+1. One fenced code block, language "javascript", with the complete runnable script and nothing else inside it.
+2. After the closing fence, a line containing exactly: ### SUGGESTIONS
+3. Then short markdown bullets: things you deliberately did NOT change because changing them would alter the data or content, and what you recommend the user do about each. Reference slides by number. Cover things like: too much text for one slide, a chart type that misrepresents the data, missing source citations, inconsistent units or labels, duplicated content, or data that would read better split across slides. If you genuinely have no suggestions, write "- No issues found."`;
+
+// ---------- Gemini call ----------
+async function callGemini({ apiKey, model, systemPrompt, userText }) {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: userText }] }],
+      generationConfig: { maxOutputTokens: 65536 },
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || res.statusText);
+
+  const candidate = data.candidates?.[0];
+  if (!candidate) {
+    const blockReason = data.promptFeedback?.blockReason;
+    throw new Error('No response from the model' + (blockReason ? ` (blocked: ${blockReason})` : ''));
+  }
+
+  const text = (candidate.content?.parts || []).map((p) => p.text || '').join('');
+  return { text, truncated: candidate.finishReason === 'MAX_TOKENS', finishReason: candidate.finishReason };
+}
+
+// Prefer a properly closed fence; fall back to an unterminated one so a
+// near-complete answer is still surfaced rather than discarded wholesale.
+function extractCode(text) {
+  const closed = text.match(/```(?:javascript|js)?\s*([\s\S]*?)```/);
+  if (closed) return closed[1];
+  const open = text.match(/```(?:javascript|js)?\s*([\s\S]*)$/);
+  return open ? open[1] : null;
+}
+
+function extractSuggestions(text) {
+  const marker = text.indexOf('### SUGGESTIONS');
+  if (marker === -1) return null;
+  return text.slice(marker + '### SUGGESTIONS'.length).trim() || null;
+}
+
+function runGeneratedCode(code) {
+  const runner = new Function('PptxGenJS', code);
+  runner(PptxGenJS);
+}
+
+// ---------- build mode ----------
 buildBtn.addEventListener('click', async () => {
   const apiKey = apiKeyEl.value.trim();
   const model = modelEl.value.trim() || 'gemini-3.5-flash';
@@ -207,74 +340,28 @@ buildBtn.addEventListener('click', async () => {
   if (typeof PptxGenJS === 'undefined') return alert('pptxgen.bundle.js failed to load — check the browser console.');
 
   buildBtn.disabled = true;
-  logEl.textContent = '';
+  clearOutput();
   appendLog('Asking Gemini to write the deck code...');
 
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 65536 },
-      }),
-    });
+    const { text, truncated, finishReason } = await callGemini({ apiKey, model, systemPrompt: SYSTEM_PROMPT, userText: prompt });
+    if (finishReason && finishReason !== 'STOP' && !truncated) appendLog(`Note: response finished with reason "${finishReason}".`);
 
-    const data = await res.json();
-    if (!res.ok) {
-      appendLog('API error: ' + (data?.error?.message || res.statusText), 'err');
-      return;
-    }
-
-    const candidate = data.candidates?.[0];
-    if (!candidate) {
-      const blockReason = data.promptFeedback?.blockReason;
-      appendLog('No response from the model' + (blockReason ? ` (blocked: ${blockReason})` : '') + '. Raw response:', 'err');
-      appendLog(JSON.stringify(data, null, 2));
-      return;
-    }
-    const truncated = candidate.finishReason === 'MAX_TOKENS';
-    if (candidate.finishReason && candidate.finishReason !== 'STOP' && !truncated) {
-      appendLog(`Note: response finished with reason "${candidate.finishReason}".`);
-    }
-
-    const text = (candidate.content?.parts || []).map((p) => p.text || '').join('');
-
-    // Prefer a properly closed fence; fall back to an unterminated one so a
-    // near-complete answer is still surfaced rather than discarded wholesale.
-    let code = null;
-    const closed = text.match(/```(?:javascript|js)?\s*([\s\S]*?)```/);
-    if (closed) {
-      code = closed[1];
-    } else {
-      const open = text.match(/```(?:javascript|js)?\s*([\s\S]*)$/);
-      if (open) code = open[1];
-    }
-
+    const code = extractCode(text);
     if (truncated) {
-      appendLog(
-        'The model ran out of output space before finishing the code, so the deck is incomplete. ' +
-        'Try asking for fewer slides (one at a time works best), or shorten the request.',
-        'err'
-      );
+      appendLog('The model ran out of output space before finishing the code, so the deck is incomplete. Try asking for fewer slides (one at a time works best), or shorten the request.', 'err');
       if (code) appendLog('--- partial code received ---\n' + code);
       return;
     }
-
     if (!code) {
       appendLog('Could not find a code block in the response. Raw response:', 'err');
       appendLog(text);
       return;
     }
-    appendLog('Got code, running it in this tab...');
 
+    appendLog('Got code, running it in this tab...');
     try {
-      const runner = new Function('PptxGenJS', code);
-      runner(PptxGenJS);
+      runGeneratedCode(code);
       appendLog('Done — check your browser downloads.', 'ok');
     } catch (execErr) {
       appendLog('Error running the generated code: ' + execErr.message, 'err');
@@ -284,6 +371,240 @@ buildBtn.addEventListener('click', async () => {
     appendLog('Error: ' + err.message, 'err');
   } finally {
     buildBtn.disabled = false;
+  }
+});
+
+// ---------- .pptx extraction (client-side, via the JSZip bundled with pptxgenjs) ----------
+const NS = {
+  a: 'http://schemas.openxmlformats.org/drawingml/2006/main',
+  c: 'http://schemas.openxmlformats.org/drawingml/2006/chart',
+  r: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+};
+
+function parseXml(str) {
+  return new DOMParser().parseFromString(str, 'application/xml');
+}
+
+function textOfParagraph(pEl) {
+  const runs = pEl.getElementsByTagNameNS(NS.a, 't');
+  let out = '';
+  for (let i = 0; i < runs.length; i++) out += runs[i].textContent;
+  return out.trim();
+}
+
+function tableToLines(tbl) {
+  const rows = tbl.getElementsByTagNameNS(NS.a, 'tr');
+  const lines = [];
+  for (let r = 0; r < rows.length; r++) {
+    const cells = rows[r].getElementsByTagNameNS(NS.a, 'tc');
+    const vals = [];
+    for (let c = 0; c < cells.length; c++) {
+      const ps = cells[c].getElementsByTagNameNS(NS.a, 'p');
+      let cellText = '';
+      for (let p = 0; p < ps.length; p++) {
+        const t = textOfParagraph(ps[p]);
+        if (t) cellText += (cellText ? ' ' : '') + t;
+      }
+      vals.push(cellText);
+    }
+    lines.push('| ' + vals.join(' | ') + ' |');
+  }
+  return lines;
+}
+
+function chartToLines(chartDoc) {
+  const lines = [];
+  const sers = chartDoc.getElementsByTagNameNS(NS.c, 'ser');
+  if (!sers.length) return lines;
+
+  const chartType = sers[0].parentNode && sers[0].parentNode.localName ? sers[0].parentNode.localName : 'chart';
+  lines.push(`CHART (type: ${chartType})`);
+
+  let catsWritten = false;
+  for (let s = 0; s < sers.length; s++) {
+    const ser = sers[s];
+
+    const txEls = ser.getElementsByTagNameNS(NS.c, 'tx');
+    let name = '';
+    if (txEls.length) {
+      const vs = txEls[0].getElementsByTagNameNS(NS.c, 'v');
+      if (vs.length) name = vs[0].textContent.trim();
+    }
+
+    if (!catsWritten) {
+      const catEls = ser.getElementsByTagNameNS(NS.c, 'cat');
+      if (catEls.length) {
+        const pts = catEls[0].getElementsByTagNameNS(NS.c, 'v');
+        const cats = [];
+        for (let i = 0; i < pts.length; i++) cats.push(pts[i].textContent.trim());
+        if (cats.length) { lines.push('categories: ' + cats.join(' | ')); catsWritten = true; }
+      }
+    }
+
+    const valEls = ser.getElementsByTagNameNS(NS.c, 'val');
+    const vals = [];
+    if (valEls.length) {
+      const pts = valEls[0].getElementsByTagNameNS(NS.c, 'v');
+      for (let i = 0; i < pts.length; i++) vals.push(pts[i].textContent.trim());
+    }
+    lines.push(`series "${name || 'Series ' + (s + 1)}": ` + vals.join(' | '));
+  }
+  return lines;
+}
+
+async function extractPptx(file) {
+  const zip = await JSZip.loadAsync(file);
+
+  const slideNames = Object.keys(zip.files)
+    .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .sort((a, b) => {
+      const na = parseInt(a.match(/slide(\d+)\.xml$/)[1], 10);
+      const nb = parseInt(b.match(/slide(\d+)\.xml$/)[1], 10);
+      return na - nb;
+    });
+
+  if (!slideNames.length) throw new Error('No slides found — is this really a .pptx file? (.ppt and Google Slides links are not supported; save as .pptx first.)');
+
+  const out = [];
+  for (let i = 0; i < slideNames.length; i++) {
+    const name = slideNames[i];
+    const doc = parseXml(await zip.file(name).async('string'));
+    const block = [`=== SLIDE ${i + 1} ===`];
+
+    // Tables first, and remember their text nodes so body text doesn't repeat them.
+    const consumed = new Set();
+    const tbls = doc.getElementsByTagNameNS(NS.a, 'tbl');
+    for (let t = 0; t < tbls.length; t++) {
+      const ts = tbls[t].getElementsByTagNameNS(NS.a, 't');
+      for (let k = 0; k < ts.length; k++) consumed.add(ts[k]);
+      block.push(`TABLE ${t + 1}:`);
+      block.push(...tableToLines(tbls[t]));
+    }
+
+    // Remaining paragraph text, one line per paragraph, in document order.
+    const paras = doc.getElementsByTagNameNS(NS.a, 'p');
+    const textLines = [];
+    for (let p = 0; p < paras.length; p++) {
+      const ts = paras[p].getElementsByTagNameNS(NS.a, 't');
+      let skip = false;
+      for (let k = 0; k < ts.length; k++) if (consumed.has(ts[k])) { skip = true; break; }
+      if (skip) continue;
+      const t = textOfParagraph(paras[p]);
+      if (t) textLines.push(t);
+    }
+    if (textLines.length) {
+      block.push('TEXT:');
+      block.push(...textLines);
+    }
+
+    // Charts referenced by this slide, via its relationship part.
+    const relName = name.replace(/^ppt\/slides\//, 'ppt/slides/_rels/') + '.rels';
+    const relFile = zip.file(relName);
+    if (relFile) {
+      const relDoc = parseXml(await relFile.async('string'));
+      const rels = relDoc.getElementsByTagName('Relationship');
+      for (let rIdx = 0; rIdx < rels.length; rIdx++) {
+        const type = rels[rIdx].getAttribute('Type') || '';
+        if (!/\/chart$/.test(type)) continue;
+        let target = rels[rIdx].getAttribute('Target') || '';
+        target = target.replace(/^\.\.\//, 'ppt/').replace(/^\/+/, '');
+        if (!target.startsWith('ppt/')) target = 'ppt/charts/' + target.split('/').pop();
+        const chartFile = zip.file(target);
+        if (!chartFile) continue;
+        const chartLines = chartToLines(parseXml(await chartFile.async('string')));
+        if (chartLines.length) block.push(...chartLines);
+      }
+    }
+
+    out.push(block.join('\n'));
+  }
+
+  return { slideCount: slideNames.length, text: out.join('\n\n') };
+}
+
+let lastExtract = null;
+
+$('pptxFile').addEventListener('change', async () => {
+  const file = $('pptxFile').files[0];
+  const infoEl = $('fileInfo');
+  lastExtract = null;
+  if (!file) { infoEl.style.display = 'none'; return; }
+
+  infoEl.style.display = 'block';
+  infoEl.textContent = 'Reading file...';
+  try {
+    lastExtract = await extractPptx(file);
+    const chars = lastExtract.text.length;
+    let msg = `Read ${lastExtract.slideCount} slide(s), ${chars.toLocaleString()} characters of content.`;
+    if (lastExtract.slideCount > 8) msg += ' That is a lot of slides — if the result comes back truncated, split the file and do it in batches.';
+    infoEl.textContent = msg;
+  } catch (err) {
+    infoEl.textContent = 'Error: ' + err.message;
+  }
+});
+
+$('previewExtractBtn').addEventListener('click', () => {
+  if (!lastExtract) return alert('Choose a .pptx file first.');
+  clearOutput();
+  appendLog('--- extracted content (this is exactly what gets sent) ---');
+  appendLog(lastExtract.text);
+});
+
+// ---------- reformat mode ----------
+$('reformatBtn').addEventListener('click', async () => {
+  const apiKey = apiKeyEl.value.trim();
+  const model = modelEl.value.trim() || 'gemini-3.5-flash';
+  if (!apiKey) return alert('Paste your Gemini API key first.');
+  if (!lastExtract) return alert('Choose a .pptx file first.');
+  if (typeof PptxGenJS === 'undefined') return alert('pptxgen.bundle.js failed to load — check the browser console.');
+
+  const notes = $('reformatNotes').value.trim();
+  const reformatBtn = $('reformatBtn');
+  reformatBtn.disabled = true;
+  clearOutput();
+  appendLog(`Reformatting ${lastExtract.slideCount} slide(s) into the HiveMinds format...`);
+
+  const userText = [
+    notes ? `User notes: ${notes}\n` : '',
+    'Extracted content from the uploaded deck follows. Reproduce all of it exactly, restyled into the HiveMinds format.',
+    '',
+    lastExtract.text,
+  ].join('\n');
+
+  try {
+    const { text, truncated, finishReason } = await callGemini({ apiKey, model, systemPrompt: REFORMAT_SYSTEM_PROMPT, userText });
+    if (finishReason && finishReason !== 'STOP' && !truncated) appendLog(`Note: response finished with reason "${finishReason}".`);
+
+    const code = extractCode(text);
+    if (truncated) {
+      appendLog('The model ran out of output space before finishing, so the deck is incomplete. Split the .pptx into smaller batches of slides and reformat them separately.', 'err');
+      if (code) appendLog('--- partial code received ---\n' + code);
+      return;
+    }
+    if (!code) {
+      appendLog('Could not find a code block in the response. Raw response:', 'err');
+      appendLog(text);
+      return;
+    }
+
+    appendLog('Got code, building the reformatted deck...');
+    try {
+      runGeneratedCode(code);
+      appendLog('Done — check your browser downloads.', 'ok');
+    } catch (execErr) {
+      appendLog('Error running the generated code: ' + execErr.message, 'err');
+      appendLog('--- generated code ---\n' + code);
+    }
+
+    const suggestions = extractSuggestions(text);
+    if (suggestions) {
+      suggestionsEl.style.display = 'block';
+      suggestionsEl.querySelector('.body').textContent = suggestions;
+    }
+  } catch (err) {
+    appendLog('Error: ' + err.message, 'err');
+  } finally {
+    reformatBtn.disabled = false;
   }
 });
 </script>

@@ -79,11 +79,39 @@ server-side.
 password gate needed. Anyone who opens the URL can use the page, but only
 with a key they provide themselves.
 
-**Quality note:** `gemini-2.5-flash` is a small, fast, free-tier model —
-it follows the format instructions well for straightforward slides, but is
+**Quality note:** the free-tier flash models are small and fast — they
+follow the format instructions well for straightforward slides, but are
 less consistent than Claude on complex/unusual layouts. If a build comes
 out wrong, rephrasing the request or just clicking **Build deck** again
-often fixes it.
+often fixes it. One slide at a time is the most reliable.
+
+### The two modes
+
+**Build a new deck** — describe slides in plain English, get a `.pptx`.
+
+**Reformat an existing deck** — upload a `.pptx` you already have and get
+it back restyled into the HiveMinds format, with the data left alone:
+
+- The file is unzipped and parsed **in your browser tab** (a `.pptx` is a
+  zip; the page uses the JSZip copy already bundled inside
+  `pptxgen.bundle.js`). The file itself is never uploaded anywhere — only
+  the extracted text, table cells and chart values are sent to the model
+  so it can lay them out.
+- Slide text, table structure, and chart data (type, categories, series
+  names, series values) are extracted per slide. **Preview extracted
+  data** shows you exactly what will be sent before you send it.
+- The model is instructed to reproduce every value character-for-character
+  and to keep slide count and order — it may only change colours, fonts,
+  sizes, positions and which layout pattern the content sits in.
+- Anything that *should* change but would alter your content (too many
+  bullets, a chart type that misrepresents the data, a missing source
+  citation, inconsistent units) is returned as a **suggestion** in a
+  separate panel rather than being silently applied.
+
+Charts are re-created as native pptxgenjs charts from the extracted
+values, so they stay editable. Images, speaker notes, animations and
+custom shapes in the source deck are **not** carried over — this reads
+content, not pixel-perfect structure.
 
 ## Run it as a website with a backend (alternative — has more moving parts)
 
