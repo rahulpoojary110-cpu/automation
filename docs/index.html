@@ -54,7 +54,14 @@
     border-left: 5px solid var(--gold); border-radius: 8px; padding: 1rem 1.25rem; margin-top: 1rem;
   }
   #suggestions h3 { margin: 0 0 .5rem; font-size: 1rem; }
-  #suggestions .body { white-space: pre-wrap; font-size: .88rem; line-height: 1.5; }
+  #suggestions .body { font-size: .88rem; line-height: 1.55; }
+  #suggestions .body p { margin: .4rem 0; }
+  #suggestions .body h4 { margin: .9rem 0 .3rem; font-size: .92rem; }
+  #suggestions .body ul, #suggestions .body ol { margin: .3rem 0 .3rem 1.1rem; padding: 0; }
+  #suggestions .body li { margin: .25rem 0; }
+  #suggestions .body code { background: var(--cream); border-radius: 3px; padding: .05rem .25rem;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85em; }
+  .advChip:hover { background: var(--gold); color: #fff; border-color: var(--gold); }
   input[type=file] { font: inherit; font-size: .85rem; }
   .slideGroup { background:#fff; border:1px solid var(--gray); border-radius:10px; padding:1rem 1.25rem; margin-bottom:.75rem; }
   .slideGroup h4 { margin:0 0 .6rem; font-size:.92rem; }
@@ -90,6 +97,7 @@
     <button class="tab active" id="tabBuild" type="button">Build a new deck</button>
     <button class="tab" id="tabReformat" type="button">Reformat an existing deck</button>
     <button class="tab" id="tabUpdate" type="button">Update numbers</button>
+    <button class="tab" id="tabAdvisor" type="button">Ask AI</button>
   </div>
 
   <div id="panelBuild">
@@ -159,8 +167,32 @@
     <div id="numbersPanel"></div>
   </div>
 
+  <div id="panelAdvisor" style="display:none;">
+    <div class="card">
+      <label for="advPrompt">Tell the AI what you want to do</label>
+      <textarea id="advPrompt" placeholder="e.g. I'm pitching this to a retail client next week and it feels too dense — what should I cut and what's missing?"></textarea>
+      <div style="margin-top:.5rem;">
+        <span class="modelChip advChip">Review my deck and tell me what's weak</span>
+        <span class="modelChip advChip">Make this client-pitch ready</span>
+        <span class="modelChip advChip">Are my charts the right type for this data?</span>
+        <span class="modelChip advChip">Suggest a structure for a 10-slide pitch</span>
+        <span class="modelChip advChip">Tighten this into half the slides</span>
+      </div>
+
+      <label for="advFile" style="margin-top:.9rem;">Attach a deck for context (optional)</label>
+      <input type="file" id="advFile" accept=".pptx" />
+      <div class="hint">With a deck attached the advice references your actual slides by number. Without one it answers from your description alone — useful for planning a deck you haven't built yet.</div>
+      <div id="advInfo" class="hint" style="display:none;"></div>
+
+      <div style="margin-top:.75rem; display:flex; gap:.5rem; flex-wrap:wrap;">
+        <button id="advBtn">Get suggestions</button>
+        <button id="clearBtn3" class="secondary" type="button">Clear</button>
+      </div>
+    </div>
+  </div>
+
   <div id="log"></div>
-  <div id="suggestions"><h3>Suggestions (not applied — your data was left as-is)</h3><div class="body"></div></div>
+  <div id="suggestions"><h3>Suggestions</h3><div class="body"></div><div id="suggestionActions" style="margin-top:.9rem; display:none;"></div></div>
 
   <footer>
     No server, no build step — this page is the whole app. There's no visual
@@ -196,7 +228,63 @@ function clearOutput() {
   logEl.textContent = '';
   logEl.style.display = 'none';
   suggestionsEl.style.display = 'none';
-  suggestionsEl.querySelector('.body').textContent = '';
+  suggestionsEl.querySelector('.body').innerHTML = '';
+  $('suggestionActions').style.display = 'none';
+  $('suggestionActions').innerHTML = '';
+}
+
+// Minimal markdown renderer. Builds nodes with textContent only — model output
+// is never injected as HTML.
+function applyInline(el, text) {
+  text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).forEach((part) => {
+    if (!part) return;
+    if (/^\*\*[\s\S]+\*\*$/.test(part)) {
+      const b = document.createElement('strong'); b.textContent = part.slice(2, -2); el.appendChild(b);
+    } else if (/^`[^`]+`$/.test(part)) {
+      const c = document.createElement('code'); c.textContent = part.slice(1, -1); el.appendChild(c);
+    } else {
+      el.appendChild(document.createTextNode(part));
+    }
+  });
+}
+
+function renderMarkdown(container, md) {
+  container.innerHTML = '';
+  let list = null, listTag = null;
+  md.split('\n').forEach((line) => {
+    const t = line.trim();
+    if (!t) { list = null; listTag = null; return; }
+
+    if (/^#{1,6}\s/.test(t)) {
+      list = null; listTag = null;
+      const h = document.createElement('h4');
+      h.textContent = t.replace(/^#{1,6}\s*/, '');
+      container.appendChild(h);
+      return;
+    }
+    const bullet = /^[-*]\s+(.*)$/.exec(t);
+    const numbered = /^\d+[.)]\s+(.*)$/.exec(t);
+    if (bullet || numbered) {
+      const tag = bullet ? 'ul' : 'ol';
+      if (!list || listTag !== tag) {
+        list = document.createElement(tag); listTag = tag; container.appendChild(list);
+      }
+      const li = document.createElement('li');
+      applyInline(li, (bullet || numbered)[1]);
+      list.appendChild(li);
+      return;
+    }
+    list = null; listTag = null;
+    const p = document.createElement('p');
+    applyInline(p, t);
+    container.appendChild(p);
+  });
+}
+
+function showSuggestions(title, markdown) {
+  suggestionsEl.querySelector('h3').textContent = title;
+  renderMarkdown(suggestionsEl.querySelector('.body'), markdown);
+  suggestionsEl.style.display = 'block';
 }
 $('clearBtn').addEventListener('click', clearOutput);
 $('clearBtn2').addEventListener('click', clearOutput);
@@ -212,7 +300,10 @@ function appendLog(text, cls) {
 
 // ---------- tabs ----------
 function selectTab(which) {
-  const tabs = { build: ['tabBuild', 'panelBuild'], reformat: ['tabReformat', 'panelReformat'], update: ['tabUpdate', 'panelUpdate'] };
+  const tabs = {
+    build: ['tabBuild', 'panelBuild'], reformat: ['tabReformat', 'panelReformat'],
+    update: ['tabUpdate', 'panelUpdate'], advisor: ['tabAdvisor', 'panelAdvisor'],
+  };
   Object.entries(tabs).forEach(([key, [tabId, panelId]]) => {
     $(tabId).classList.toggle('active', key === which);
     $(panelId).style.display = key === which ? '' : 'none';
@@ -221,6 +312,7 @@ function selectTab(which) {
 $('tabBuild').addEventListener('click', () => selectTab('build'));
 $('tabReformat').addEventListener('click', () => selectTab('reformat'));
 $('tabUpdate').addEventListener('click', () => selectTab('update'));
+$('tabAdvisor').addEventListener('click', () => selectTab('advisor'));
 
 // ---------- model discovery ----------
 $('listModelsBtn').addEventListener('click', async () => {
@@ -1052,14 +1144,109 @@ $('reformatBtn').addEventListener('click', async () => {
     }
 
     const suggestions = extractSuggestions(text);
-    if (suggestions) {
-      suggestionsEl.style.display = 'block';
-      suggestionsEl.querySelector('.body').textContent = suggestions;
-    }
+    if (suggestions) showSuggestions('Suggestions (not applied — your data was left as-is)', suggestions);
   } catch (err) {
     appendLog('Error: ' + err.message, 'err');
   } finally {
     reformatBtn.disabled = false;
+  }
+});
+
+// ---------- advisor mode ----------
+const ADVISOR_SYSTEM_PROMPT = `You are a senior presentation strategist advising on decks built in the HiveMinds house format. The user tells you what they want; you give sharp, specific, prioritised advice. You do NOT produce slide code.
+
+House format you are advising within: 16:9, dark-green (#13352B) left sidebar rail with a vertical category label and a source citation, cream (#F7F4EF) canvas, gold (#C8A028) italic subtitle under a dark-green bold title, Calibri throughout, logo placeholders top-right and bottom-right. Five standard patterns: P1 snapshot (3 stat cards + supporting blocks), P2 stacked bar + donut callouts, P3 stat cards + dual chart, P4 donut + comparison table, P5 wide data table + insight panel. Chart rules: always specify bar direction explicitly, data labels on, hide the value axis, legend only with 2+ series, donuts need holeSize 60+ and a separate centre label.
+
+How to answer:
+- Lead with the single most important thing. Do not open with a summary of what they asked.
+- Be concrete and specific. "Slide 3's donut has 9 segments — switch to a horizontal bar sorted high-to-low" beats "consider simplifying charts".
+- When a deck is attached, reference slides by number and quote the actual text or figures you are reacting to. Never invent content that is not in the extract.
+- Say what to cut, not only what to add. Most decks are too long.
+- Where a claim needs a source, flag the missing citation.
+- If they are planning a deck that does not exist yet, propose a slide-by-slide outline with a one-line purpose and the recommended pattern for each.
+- Prefer 4-8 substantive points over a long shallow list. Skip anything obvious.
+- Be honest about weaknesses. If something does not work, say so plainly and say what to do instead.
+
+Format your answer as markdown: short "## " section headings, "- " bullets, "**bold**" for the thing being changed. No preamble, no sign-off.
+
+If — and only if — the user is asking you to plan or restructure a deck, end with a section exactly titled "## BUILD PROMPT" containing a single ready-to-paste request describing the slides to build (following the 5-part shape: what it is, the data, the charts, the layout pattern, special rules). Omit that section entirely for review/critique answers.`;
+
+let advExtract = null;
+
+document.querySelectorAll('.advChip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    const box = $('advPrompt');
+    box.value = box.value.trim() ? box.value.trim() + '\n' + chip.textContent : chip.textContent;
+    box.focus();
+  });
+});
+
+$('advFile').addEventListener('change', async () => {
+  const file = $('advFile').files[0];
+  const info = $('advInfo');
+  advExtract = null;
+  if (!file) { info.style.display = 'none'; return; }
+  info.style.display = 'block';
+  info.textContent = 'Reading file...';
+  try {
+    advExtract = await extractPptx(file);
+    info.textContent = `Attached ${file.name} — ${advExtract.slideCount} slide(s) of context. Advice will reference these slides directly.`;
+  } catch (err) {
+    info.textContent = 'Error: ' + err.message;
+  }
+});
+
+$('clearBtn3').addEventListener('click', clearOutput);
+
+$('advBtn').addEventListener('click', async () => {
+  const apiKey = apiKeyEl.value.trim();
+  const model = modelEl.value.trim() || 'gemini-3.5-flash';
+  const ask = $('advPrompt').value.trim();
+  if (!apiKey) return alert('Paste your Gemini API key first.');
+  if (!ask) return alert('Tell the AI what you want to do first.');
+
+  const btn = $('advBtn');
+  btn.disabled = true;
+  clearOutput();
+  appendLog(advExtract ? `Thinking about your ${advExtract.slideCount}-slide deck...` : 'Thinking...');
+
+  const userText = advExtract
+    ? `${ask}\n\nHere is the deck to advise on:\n\n${advExtract.text}`
+    : `${ask}\n\n(No deck attached — advise from the description alone.)`;
+
+  try {
+    const { text, truncated } = await callGemini({ apiKey, model, systemPrompt: ADVISOR_SYSTEM_PROMPT, userText });
+    if (!text.trim()) { appendLog('The model returned an empty response. Try again.', 'err'); return; }
+    if (truncated) appendLog('Note: the answer was cut short by the output limit — the advice below may be incomplete.', 'err');
+
+    logEl.style.display = 'none';
+
+    const marker = text.indexOf('## BUILD PROMPT');
+    const advice = marker === -1 ? text : text.slice(0, marker).trim();
+    const buildPrompt = marker === -1 ? null : text.slice(marker + '## BUILD PROMPT'.length).trim();
+
+    showSuggestions('Suggestions', advice);
+
+    if (buildPrompt) {
+      const actions = $('suggestionActions');
+      actions.style.display = 'block';
+      const btnSend = document.createElement('button');
+      btnSend.textContent = 'Send this plan to the Build tab';
+      btnSend.addEventListener('click', () => {
+        promptEl.value = buildPrompt;
+        selectTab('build');
+        promptEl.focus();
+      });
+      actions.appendChild(btnSend);
+      const note = document.createElement('div');
+      note.className = 'hint';
+      note.textContent = 'Fills the Build tab with a ready-to-run request based on this advice — review it before building.';
+      actions.appendChild(note);
+    }
+  } catch (err) {
+    appendLog('Error: ' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
   }
 });
 </script>
