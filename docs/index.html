@@ -30,6 +30,12 @@
   button:disabled { opacity: .5; cursor: default; }
   button.secondary { background: transparent; color: var(--green); border: 1px solid var(--gray); }
   .hint { font-size: .78rem; color: #8a8a7a; margin-top: .35rem; }
+  .modelChip {
+    display: inline-block; background: var(--cream); border: 1px solid var(--gray);
+    border-radius: 999px; padding: .3rem .7rem; margin: .2rem .3rem .2rem 0;
+    font-size: .78rem; cursor: pointer; font-family: ui-monospace, Menlo, Consolas, monospace;
+  }
+  .modelChip:hover { background: var(--gold); color: #fff; border-color: var(--gold); }
   #log {
     background: var(--green); color: #e8e8e0; font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: .82rem; border-radius: 8px; padding: 1rem; max-height: 420px; overflow-y: auto;
@@ -50,8 +56,12 @@
     <input type="password" id="apiKey" placeholder="AIza..." autocomplete="off" />
     <div class="hint">Saved only in this browser's local storage. Get a free key (no credit card) at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>.</div>
     <label for="model" style="margin-top:.75rem;">Model</label>
-    <input type="text" id="model" value="gemini-2.5-flash" autocomplete="off" />
-    <div class="hint">Free-tier model id. If this stops working (Google renames/retires models fairly often), check <a href="https://aistudio.google.com" target="_blank" rel="noopener">aistudio.google.com</a> for the current free-tier flash model name and paste it here.</div>
+    <div style="display:flex; gap:.5rem; align-items:center;">
+      <input type="text" id="model" value="gemini-3.5-flash" autocomplete="off" style="flex:1;" />
+      <button id="listModelsBtn" class="secondary" type="button" style="white-space:nowrap;">List my models</button>
+    </div>
+    <div class="hint">Google renames and retires model ids often. If you get a "model is no longer available" error, click <strong>List my models</strong> — it asks Google which models your key can actually use right now, then click one to select it.</div>
+    <div id="modelList" style="display:none; margin-top:.5rem;"></div>
   </div>
 
   <div class="card">
@@ -83,12 +93,72 @@ const logEl = $('log');
 
 apiKeyEl.value = localStorage.getItem('deckAgentApiKey') || '';
 apiKeyEl.addEventListener('change', () => localStorage.setItem('deckAgentApiKey', apiKeyEl.value));
-modelEl.value = localStorage.getItem('deckAgentModel') || modelEl.value;
+// Model ids Google has retired — ignore a stale saved value so the current
+// default in the markup wins instead of a dead id from a previous visit.
+const RETIRED_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+const savedModel = localStorage.getItem('deckAgentModel');
+if (savedModel && !RETIRED_MODELS.includes(savedModel)) {
+  modelEl.value = savedModel;
+} else if (savedModel) {
+  localStorage.removeItem('deckAgentModel');
+}
 modelEl.addEventListener('change', () => localStorage.setItem('deckAgentModel', modelEl.value));
 
 $('clearBtn').addEventListener('click', () => {
   logEl.textContent = '';
   logEl.style.display = 'none';
+});
+
+$('listModelsBtn').addEventListener('click', async () => {
+  const apiKey = apiKeyEl.value.trim();
+  const listEl = $('modelList');
+  if (!apiKey) return alert('Paste your Gemini API key first.');
+
+  listEl.style.display = 'block';
+  listEl.textContent = 'Asking Google which models your key can use...';
+
+  try {
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+      headers: { 'x-goog-api-key': apiKey },
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      listEl.textContent = 'Error: ' + (data?.error?.message || res.statusText);
+      return;
+    }
+
+    const usable = (data.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map((m) => (m.name || '').replace(/^models\//, ''))
+      .filter(Boolean)
+      .sort();
+
+    if (!usable.length) {
+      listEl.textContent = 'No models supporting generateContent were returned for this key.';
+      return;
+    }
+
+    listEl.textContent = '';
+    const label = document.createElement('div');
+    label.className = 'hint';
+    label.style.margin = '0 0 .25rem';
+    label.textContent = 'Click one to use it (flash/lite models are the free-tier ones):';
+    listEl.appendChild(label);
+
+    usable.forEach((name) => {
+      const chip = document.createElement('span');
+      chip.className = 'modelChip';
+      chip.textContent = name;
+      chip.addEventListener('click', () => {
+        modelEl.value = name;
+        localStorage.setItem('deckAgentModel', name);
+        listEl.style.display = 'none';
+      });
+      listEl.appendChild(chip);
+    });
+  } catch (err) {
+    listEl.textContent = 'Error: ' + err.message;
+  }
 });
 
 function appendLog(text, cls) {
@@ -128,7 +198,7 @@ BROWSER EXECUTION CONTRACT (critical, follow exactly):
 
 buildBtn.addEventListener('click', async () => {
   const apiKey = apiKeyEl.value.trim();
-  const model = modelEl.value.trim() || 'gemini-2.5-flash';
+  const model = modelEl.value.trim() || 'gemini-3.5-flash';
   const prompt = promptEl.value.trim();
   if (!apiKey) return alert('Paste your Gemini API key first.');
   if (!prompt) return alert('Describe what you want built.');
