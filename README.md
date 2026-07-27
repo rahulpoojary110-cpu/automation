@@ -19,6 +19,58 @@ You describe a slide (or several), and the agent:
 The brand format (colours, fonts, layout, logo placeholders) is locked into
 the skill, so you never have to re-paste it — just describe the content.
 
+## Run it as a website (nothing to install, on any device)
+
+If you can't or don't want to install anything locally, deploy the bundled
+web UI (`server/index.mjs` + `public/index.html`) to a free host. This runs
+Node.js on the host's server, not your machine — you only need a browser.
+
+**Deploy to Render (free tier), entirely through your browser:**
+
+1. Push/fork this repo to your own GitHub account (already done if you're
+   working from this branch).
+2. Go to [dashboard.render.com](https://dashboard.render.com) → sign in with
+   GitHub → **New** → **Web Service** → pick this repo.
+   (Render auto-detects `render.yaml` in this repo, which sets the build/start
+   commands for you — or set them manually: build `npm install`, start
+   `npm run web`.)
+3. Under **Environment**, add `SITE_PASSWORD` set to a password of your
+   choosing. This gates *usage* (not just page load) — skipping it means
+   anyone who finds the URL can run the agent, which executes shell commands
+   on your server, so set one before sharing the link.
+4. Click **Deploy**. Render gives you a URL like
+   `https://deck-sop-agent-xxxx.onrender.com`.
+5. Open that URL, enter the site password if you set one, paste your
+   Anthropic API key (stays in your browser's local storage, sent per
+   request, never stored server-side), describe your deck, and click
+   **Build deck**. Watch it work in the log panel; download the `.pptx` when
+   it finishes.
+
+Any Node-hosting PaaS works the same way (Railway, Fly.io, etc.) — the app
+just needs `npm install` + `npm run web`, and a writable filesystem for the
+generated files. Free tiers on these platforms typically spin down when
+idle, so the first request after a while can take ~30s to wake up.
+
+If you'd rather deploy via Docker (e.g. Railway/Fly.io "deploy from
+Dockerfile"), use the included `Dockerfile` — see the note below on why it
+matters.
+
+**Troubleshooting: "agent process ended without completing a turn" /
+permission errors mentioning root.** The Claude Agent SDK refuses to run
+with permissions bypassed (required for this to work unattended) when the
+process is running as the root user, as a safety guard. Render's native
+Node runtime and most buildpack-style hosts already run your app as
+non-root, so this shouldn't come up there — but a plain `docker run` (or
+any host that defaults containers to root) will hit it. The included
+`Dockerfile` sets a non-root user specifically to avoid this; use it if
+you're deploying via Docker anywhere.
+
+**Note on cost/security:** every build call spends *your* pasted API key's
+credits and runs real shell commands (`npm`, `node`, optionally `soffice`)
+in the server's container. That's what makes it capable of writing and
+running the `pptxgenjs` script — but it's also why the password gate exists.
+Don't share the URL+password with anyone you wouldn't hand shell access to.
+
 ## Windows: one-click app
 
 For Windows, skip the CLI setup below entirely:
@@ -105,8 +157,12 @@ Finished `.pptx` files land in `./output/`.
 - `src/app.win32.mjs` — entry point for the single-file Windows `.exe` build
   (see below); statically embeds the skill files and the win32 `claude`
   binary into the bundle.
+- `server/index.mjs` + `public/index.html` — the hosted web version: an
+  Express server exposing a streaming `/api/build` endpoint (Server-Sent
+  Events) and a single-page browser UI, for the "run it as a website" option
+  above.
 
-All three call the same Claude Agent SDK `query()`, enabling only the
+All of these call the same Claude Agent SDK `query()`, enabling only the
 `deck-sop` skill and the tools it needs (Bash, Read, Write, Edit, Glob,
 Grep).
 

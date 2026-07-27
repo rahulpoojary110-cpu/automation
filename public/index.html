@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>deck-sop-agent</title>
+<style>
+  :root {
+    --green: #13352B;
+    --cream: #F7F4EF;
+    --gold: #C8A028;
+    --gray: #E8E4DC;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Calibri, Arial, sans-serif;
+    background: var(--cream);
+    color: var(--green);
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+  .wrap { width: 100%; max-width: 780px; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .sub { color: #6b6b5f; margin: 0 0 1.5rem; font-size: .9rem; }
+  .card {
+    background: #fff;
+    border: 1px solid var(--gray);
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+  label { display: block; font-weight: 600; font-size: .85rem; margin-bottom: .35rem; }
+  input[type=password], input[type=text], textarea {
+    width: 100%;
+    font: inherit;
+    padding: .6rem .7rem;
+    border: 1px solid var(--gray);
+    border-radius: 6px;
+    background: var(--cream);
+    color: var(--green);
+  }
+  textarea { min-height: 140px; resize: vertical; }
+  .row { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 220px; }
+  button {
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: .65rem 1.2rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.secondary { background: transparent; color: var(--green); border: 1px solid var(--gray); }
+  .hint { font-size: .78rem; color: #8a8a7a; margin-top: .35rem; }
+  #log {
+    background: var(--green);
+    color: #e8e8e0;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: .82rem;
+    border-radius: 8px;
+    padding: 1rem;
+    max-height: 380px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    display: none;
+  }
+  #log .tool { color: var(--gold); }
+  #log .err { color: #ff9c8f; }
+  #files { margin-top: .75rem; display: none; }
+  #files a {
+    display: inline-block;
+    background: var(--gold);
+    color: #13352B;
+    text-decoration: none;
+    padding: .5rem .9rem;
+    border-radius: 6px;
+    font-weight: 700;
+    margin: .25rem .5rem .25rem 0;
+  }
+  #loginOverlay {
+    position: fixed; inset: 0; background: rgba(19,53,43,.85);
+    display: none; align-items: center; justify-content: center;
+  }
+  #loginOverlay .card { width: 320px; }
+  footer { font-size: .75rem; color: #8a8a7a; text-align: center; margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>deck-sop-agent</h1>
+  <p class="sub">Describe a slide or deck in the HiveMinds house format. Your API key stays in your browser — it's sent per-request and never stored on the server.</p>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label for="apiKey">Anthropic API key</label>
+        <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" />
+        <div class="hint">Saved only in this browser's local storage. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="prompt">What do you want to build?</label>
+    <textarea id="prompt" placeholder="Build a P1 snapshot slide titled 'Q3 Launch Brief'. Stat cards: ...&#10;Follow the skill's 5-part prompt: what it is / the data / the charts / the layout pattern / special rules."></textarea>
+    <div class="hint">Optional: paste a custom format block above your request to override the default HiveMinds colours/fonts for this build only.</div>
+    <div style="margin-top:.75rem; display:flex; gap:.5rem;">
+      <button id="buildBtn">Build deck</button>
+      <button id="clearBtn" class="secondary" type="button">Clear log</button>
+    </div>
+  </div>
+
+  <div id="log"></div>
+  <div id="files" class="card"></div>
+
+  <footer>Runs entirely server-side per request. Each build executes shell commands (npm/node) on the server to render the .pptx.</footer>
+</div>
+
+<div id="loginOverlay">
+  <div class="card">
+    <label for="loginPassword">Site password</label>
+    <input type="password" id="loginPassword" />
+    <div class="hint" id="loginError" style="color:#c0392b;"></div>
+    <div style="margin-top:.75rem;">
+      <button id="loginBtn">Enter</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const apiKeyEl = $('apiKey');
+const promptEl = $('prompt');
+const buildBtn = $('buildBtn');
+const logEl = $('log');
+const filesEl = $('files');
+
+apiKeyEl.value = localStorage.getItem('deckAgentApiKey') || '';
+apiKeyEl.addEventListener('change', () => localStorage.setItem('deckAgentApiKey', apiKeyEl.value));
+
+$('clearBtn').addEventListener('click', () => {
+  logEl.textContent = '';
+  logEl.style.display = 'none';
+  filesEl.style.display = 'none';
+  filesEl.innerHTML = '';
+});
+
+function appendLog(text, cls) {
+  logEl.style.display = 'block';
+  const span = document.createElement('div');
+  if (cls) span.className = cls;
+  span.textContent = text;
+  logEl.appendChild(span);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function checkSession() {
+  const res = await fetch('/api/session');
+  const data = await res.json();
+  if (data.passwordRequired && !data.authed) {
+    $('loginOverlay').style.display = 'flex';
+  }
+}
+checkSession();
+
+$('loginBtn').addEventListener('click', async () => {
+  const password = $('loginPassword').value;
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    $('loginOverlay').style.display = 'none';
+  } else {
+    $('loginError').textContent = data.error || 'Wrong password';
+  }
+});
+
+buildBtn.addEventListener('click', async () => {
+  const apiKey = apiKeyEl.value.trim();
+  const prompt = promptEl.value.trim();
+  if (!apiKey) return alert('Paste your Anthropic API key first.');
+  if (!prompt) return alert('Describe what you want built.');
+
+  buildBtn.disabled = true;
+  logEl.textContent = '';
+  logEl.style.display = 'block';
+  filesEl.style.display = 'none';
+  filesEl.innerHTML = '';
+  appendLog('Starting...');
+
+  try {
+    const res = await fetch('/api/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey, prompt }),
+    });
+
+    if (res.status === 401) {
+      $('loginOverlay').style.display = 'flex';
+      appendLog('Session expired, please log in again.', 'err');
+      return;
+    }
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      appendLog('Error: ' + (data.error || res.statusText), 'err');
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const chunk = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const eventMatch = chunk.match(/^event: (.+)$/m);
+        const dataMatch = chunk.match(/^data: (.+)$/m);
+        if (!eventMatch || !dataMatch) continue;
+        const event = eventMatch[1];
+        const data = JSON.parse(dataMatch[1]);
+
+        if (event === 'text') appendLog(data.text);
+        else if (event === 'tool') appendLog(`[${data.name}] ${JSON.stringify(data.input).slice(0, 160)}`, 'tool');
+        else if (event === 'result') {
+          if (data.ok) appendLog(`Done in ${(data.durationMs / 1000).toFixed(1)}s, ${data.numTurns} turns, $${data.costUsd.toFixed(4)}`);
+          else appendLog(`Stopped: ${data.subtype} ${(data.errors || []).join(' ')}`, 'err');
+        } else if (event === 'files') {
+          if (data.files.length) {
+            filesEl.style.display = 'block';
+            filesEl.innerHTML = '<strong>Download:</strong><br>' +
+              data.files.map((f) => `<a href="${f}" target="_blank">${decodeURIComponent(f.split('/').pop())}</a>`).join('');
+          } else {
+            appendLog('No .pptx file was produced — check the log above.', 'err');
+          }
+        } else if (event === 'error') {
+          appendLog('Error: ' + data.message, 'err');
+        }
+      }
+    }
+  } catch (err) {
+    appendLog('Error: ' + err.message, 'err');
+  } finally {
+    buildBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
