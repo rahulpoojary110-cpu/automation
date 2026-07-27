@@ -194,7 +194,9 @@ CHART RULES:
 BROWSER EXECUTION CONTRACT (critical, follow exactly):
 - \`PptxGenJS\` is already a global constructor loaded on the page (browser bundle) — do NOT use require() or import.
 - Write: \`const pres = new PptxGenJS();\` then build slide(s), then end with \`pres.writeFile({ fileName: '<short-kebab-case-name>.pptx' });\` — in the browser this triggers an automatic file download, no filesystem access happens or is needed.
-- Output ONLY one fenced code block, language "javascript", containing the complete runnable script and nothing else — no prose before or after, no explanations. If you are missing critical data (exact numbers/labels the user didn't give you), make a reasonable placeholder-free choice and proceed rather than asking — there is no way for you to ask a follow-up in this flow.`;
+- Output ONLY one fenced code block, language "javascript", containing the complete runnable script and nothing else — no prose before or after, no explanations. If you are missing critical data (exact numbers/labels the user didn't give you), make a reasonable placeholder-free choice and proceed rather than asking — there is no way for you to ask a follow-up in this flow.
+- Output budget is limited and a truncated script produces NO file at all, so write compactly: no comments, no banner separators, no blank-line padding. Reuse short local variables/loops for repeated elements (stat cards, callouts, table rows) instead of repeating near-identical blocks. Finishing the script matters far more than readability.
+- If the user asks for more slides than you can complete within the budget, build as many complete slides as you can and still finish with the writeFile call, rather than leaving the script unterminated.`;
 
 buildBtn.addEventListener('click', async () => {
   const apiKey = apiKeyEl.value.trim();
@@ -218,7 +220,7 @@ buildBtn.addEventListener('click', async () => {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 8192 },
+        generationConfig: { maxOutputTokens: 65536 },
       }),
     });
 
@@ -235,18 +237,39 @@ buildBtn.addEventListener('click', async () => {
       appendLog(JSON.stringify(data, null, 2));
       return;
     }
-    if (candidate.finishReason && candidate.finishReason !== 'STOP') {
-      appendLog(`Note: response finished with reason "${candidate.finishReason}" (may be truncated or blocked).`);
+    const truncated = candidate.finishReason === 'MAX_TOKENS';
+    if (candidate.finishReason && candidate.finishReason !== 'STOP' && !truncated) {
+      appendLog(`Note: response finished with reason "${candidate.finishReason}".`);
     }
 
     const text = (candidate.content?.parts || []).map((p) => p.text || '').join('');
-    const match = text.match(/```(?:javascript|js)?\s*([\s\S]*?)```/);
-    if (!match) {
+
+    // Prefer a properly closed fence; fall back to an unterminated one so a
+    // near-complete answer is still surfaced rather than discarded wholesale.
+    let code = null;
+    const closed = text.match(/```(?:javascript|js)?\s*([\s\S]*?)```/);
+    if (closed) {
+      code = closed[1];
+    } else {
+      const open = text.match(/```(?:javascript|js)?\s*([\s\S]*)$/);
+      if (open) code = open[1];
+    }
+
+    if (truncated) {
+      appendLog(
+        'The model ran out of output space before finishing the code, so the deck is incomplete. ' +
+        'Try asking for fewer slides (one at a time works best), or shorten the request.',
+        'err'
+      );
+      if (code) appendLog('--- partial code received ---\n' + code);
+      return;
+    }
+
+    if (!code) {
       appendLog('Could not find a code block in the response. Raw response:', 'err');
       appendLog(text);
       return;
     }
-    const code = match[1];
     appendLog('Got code, running it in this tab...');
 
     try {
