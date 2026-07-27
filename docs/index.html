@@ -56,6 +56,15 @@
   #suggestions h3 { margin: 0 0 .5rem; font-size: 1rem; }
   #suggestions .body { white-space: pre-wrap; font-size: .88rem; line-height: 1.5; }
   input[type=file] { font: inherit; font-size: .85rem; }
+  .slideGroup { background:#fff; border:1px solid var(--gray); border-radius:10px; padding:1rem 1.25rem; margin-bottom:.75rem; }
+  .slideGroup h4 { margin:0 0 .6rem; font-size:.92rem; }
+  .numRow { display:grid; grid-template-columns: 1fr auto auto; gap:.6rem; align-items:center; padding:.4rem 0; border-top:1px solid var(--gray); }
+  .numRow:first-of-type { border-top:none; }
+  .numCtx { font-size:.8rem; color:#6b6b5f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .numOld { font-family: ui-monospace, Menlo, Consolas, monospace; font-size:.82rem; font-weight:700; }
+  .numRow input { width:130px; padding:.35rem .5rem; font-size:.82rem; }
+  .badge { display:inline-block; font-size:.66rem; text-transform:uppercase; letter-spacing:.04em;
+    background:var(--cream); border:1px solid var(--gray); border-radius:4px; padding:.05rem .3rem; margin-left:.4rem; color:#8a8a7a; }
   footer { font-size: .75rem; color: #8a8a7a; text-align: center; margin-top: 1.5rem; }
 </style>
 </head>
@@ -80,6 +89,7 @@
   <div class="tabs">
     <button class="tab active" id="tabBuild" type="button">Build a new deck</button>
     <button class="tab" id="tabReformat" type="button">Reformat an existing deck</button>
+    <button class="tab" id="tabUpdate" type="button">Update numbers</button>
   </div>
 
   <div id="panelBuild">
@@ -115,6 +125,38 @@
         missing source) is reported as a suggestion instead of being applied.
       </div>
     </div>
+  </div>
+
+  <div id="panelUpdate" style="display:none;">
+    <div class="card">
+      <label for="updFile">Upload the deck whose numbers you want to change</label>
+      <input type="file" id="updFile" accept=".pptx" />
+      <div class="hint">
+        This mode <strong>edits your original file in place</strong> — every font, colour, image,
+        animation, master and layout is kept byte-for-byte. Only the number text you change is
+        rewritten. Nothing is sent to any AI unless you click <em>Fill with AI</em>.
+      </div>
+      <div id="updInfo" class="hint" style="display:none;"></div>
+
+      <div style="margin-top:.75rem; display:flex; gap:.5rem; flex-wrap:wrap;">
+        <button id="scanBtn">Scan for numbers</button>
+        <button id="applyBtn" class="secondary" type="button">Apply &amp; download</button>
+        <button id="exportJsonBtn" class="secondary" type="button">Export JSON</button>
+        <button id="importJsonBtn" class="secondary" type="button">Import JSON</button>
+        <input type="file" id="importJsonFile" accept=".json" style="display:none;" />
+      </div>
+    </div>
+
+    <div class="card" id="aiFillCard" style="display:none;">
+      <label for="newDataText">Paste this period's figures, then let AI map them (optional)</label>
+      <textarea id="newDataText" style="min-height:90px;" placeholder="Q3 revenue 1,450 Cr; growth 22%; Blinkit projection 1210 Cr; volume 15.2M MT"></textarea>
+      <div style="margin-top:.6rem;">
+        <button id="aiFillBtn" class="secondary" type="button">Fill with AI</button>
+      </div>
+      <div class="hint">Only the number list and the text above are sent — never your file. Always review what it filled in before applying.</div>
+    </div>
+
+    <div id="numbersPanel"></div>
   </div>
 
   <div id="log"></div>
@@ -169,14 +211,16 @@ function appendLog(text, cls) {
 }
 
 // ---------- tabs ----------
-$('tabBuild').addEventListener('click', () => {
-  $('tabBuild').classList.add('active'); $('tabReformat').classList.remove('active');
-  $('panelBuild').style.display = ''; $('panelReformat').style.display = 'none';
-});
-$('tabReformat').addEventListener('click', () => {
-  $('tabReformat').classList.add('active'); $('tabBuild').classList.remove('active');
-  $('panelReformat').style.display = ''; $('panelBuild').style.display = 'none';
-});
+function selectTab(which) {
+  const tabs = { build: ['tabBuild', 'panelBuild'], reformat: ['tabReformat', 'panelReformat'], update: ['tabUpdate', 'panelUpdate'] };
+  Object.entries(tabs).forEach(([key, [tabId, panelId]]) => {
+    $(tabId).classList.toggle('active', key === which);
+    $(panelId).style.display = key === which ? '' : 'none';
+  });
+}
+$('tabBuild').addEventListener('click', () => selectTab('build'));
+$('tabReformat').addEventListener('click', () => selectTab('reformat'));
+$('tabUpdate').addEventListener('click', () => selectTab('update'));
 
 // ---------- model discovery ----------
 $('listModelsBtn').addEventListener('click', async () => {
@@ -521,6 +565,417 @@ async function extractPptx(file) {
 
   return { slideCount: slideNames.length, text: out.join('\n\n') };
 }
+
+// ============================================================================
+// UPDATE-NUMBERS MODE — edits the original .pptx in place so all original
+// formatting survives; only the number text you change is rewritten.
+// ============================================================================
+
+function parseNumber(text) {
+  if (!text) return null;
+  let cleaned = text.replace(/[$€£¥%()\s]/g, '');
+  const hasComma = cleaned.includes(','), hasDot = cleaned.includes('.');
+  if (hasComma && hasDot) {
+    // Whichever separator comes last is the decimal point.
+    if (cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')) cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+    else cleaned = cleaned.replace(/,/g, '');
+  } else if (hasComma) {
+    if (/^\d{1,3}(,\d{3})+$/.test(cleaned)) cleaned = cleaned.replace(/,/g, '');   // 1,234,567
+    else if (/^\d+,\d{1,2}$/.test(cleaned)) cleaned = cleaned.replace(',', '.');    // 12,5 (decimal comma)
+    else cleaned = cleaned.replace(/,/g, '');
+  }
+  const v = parseFloat(cleaned);
+  return isNaN(v) ? null : v;
+}
+
+function extractNumbers(text) {
+  if (!text) return [];
+  const found = [];
+  const overlaps = (s, e) => found.some((n) => s < n.end && e > n.start);
+  const scan = (re, type, transform) => {
+    let m;
+    const rx = new RegExp(re.source, 'g');
+    while ((m = rx.exec(text)) !== null) {
+      if (overlaps(m.index, m.index + m[0].length)) continue;
+      let numeric = parseNumber(m[0]);
+      if (transform) numeric = transform(numeric);
+      found.push({ value: m[0], start: m.index, end: m.index + m[0].length, type, numericValue: numeric });
+    }
+  };
+
+  // Numeric core: either comma-grouped (1,234,567) or a plain digit run of any
+  // length (1014). A bare \d{1,3}(,\d{3})* would silently miss plain 4+ digit
+  // numbers like 1014 or a year like 2024.
+  const N = String.raw`(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?`;
+  scan(new RegExp(`[$€£¥]\\s*${N}|${N}\\s*[$€£¥]`), 'currency');
+  scan(new RegExp(`\\(\\s*${N}\\s*\\)`), 'negative_number', (v) => (v == null ? v : -Math.abs(v)));
+  scan(new RegExp(`${N}\\s*%`), 'percentage');
+  scan(new RegExp(`(?<![\\d.])${N}(?![\\d.])`), 'number');
+
+  return found.sort((a, b) => a.start - b.start);
+}
+
+function formatNumber(value, originalFormat) {
+  if (originalFormat == null) return String(value);
+  const hasCurrency = /[$€£¥]/.test(originalFormat);
+  const hasPercent = originalFormat.includes('%');
+  const hasParens = originalFormat.includes('(') && originalFormat.includes(')');
+  const hasCommas = originalFormat.includes(',');
+
+  const decMatch = originalFormat.replace(/,/g, '').match(/\.(\d+)/);
+  const decimals = decMatch ? decMatch[1].length : 0;
+
+  const magnitude = hasParens ? Math.abs(value) : value;
+  let formatted = hasCommas
+    ? magnitude.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+    : magnitude.toFixed(decimals);
+
+  if (hasParens) formatted = `(${formatted})`;
+
+  if (hasCurrency) {
+    const sym = originalFormat.match(/[$€£¥]/)[0];
+    formatted = originalFormat.trim().startsWith(sym) ? `${sym}${formatted}` : `${formatted} ${sym}`;
+  }
+  if (hasPercent) formatted = `${formatted}%`;
+  return formatted;
+}
+
+// A typed replacement value: numeric input is re-formatted to match the
+// original's style (commas/decimals/currency/percent/parens); anything else is
+// taken literally.
+function renderReplacement(input, original) {
+  const trimmed = String(input).trim();
+  if (!trimmed) return null;
+  const asNum = parseNumber(trimmed);
+  const looksNumeric = /^[-+]?[\d.,]+$/.test(trimmed);
+  if (looksNumeric && asNum != null) return formatNumber(asNum, original);
+  return trimmed;
+}
+
+function seriesNameOf(ser) {
+  const tx = ser.getElementsByTagNameNS(NS.c, 'tx');
+  if (tx.length) {
+    const vs = tx[0].getElementsByTagNameNS(NS.c, 'v');
+    if (vs.length) return vs[0].textContent.trim();
+  }
+  return '';
+}
+
+async function chartPartsBySlide(zip, slideNames) {
+  const map = {};
+  for (let i = 0; i < slideNames.length; i++) {
+    const relName = slideNames[i].replace(/^ppt\/slides\//, 'ppt/slides/_rels/') + '.rels';
+    const relFile = zip.file(relName);
+    if (!relFile) continue;
+    const relDoc = parseXml(await relFile.async('string'));
+    const rels = relDoc.getElementsByTagName('Relationship');
+    for (let r = 0; r < rels.length; r++) {
+      if (!/\/chart$/.test(rels[r].getAttribute('Type') || '')) continue;
+      let target = (rels[r].getAttribute('Target') || '').replace(/^\.\.\//, 'ppt/').replace(/^\/+/, '');
+      if (!target.startsWith('ppt/')) target = 'ppt/charts/' + target.split('/').pop();
+      if (zip.file(target)) map[target] = i + 1;
+    }
+  }
+  return map;
+}
+
+function sortedSlideNames(zip) {
+  return Object.keys(zip.files)
+    .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .sort((a, b) => parseInt(a.match(/slide(\d+)/)[1], 10) - parseInt(b.match(/slide(\d+)/)[1], 10));
+}
+
+async function scanNumbers(file) {
+  const zip = await JSZip.loadAsync(file);
+  const slideNames = sortedSlideNames(zip);
+  if (!slideNames.length) throw new Error('No slides found — is this really a .pptx file?');
+
+  const entries = [];
+  let id = 0;
+
+  for (let i = 0; i < slideNames.length; i++) {
+    const doc = parseXml(await zip.file(slideNames[i]).async('string'));
+    const ts = doc.getElementsByTagNameNS(NS.a, 't');
+    for (let n = 0; n < ts.length; n++) {
+      const txt = ts[n].textContent;
+      extractNumbers(txt).forEach((num, matchIdx) => {
+        entries.push({
+          id: id++, part: slideNames[i], kind: 'text', nodeIdx: n, matchIdx,
+          slide: i + 1, context: txt, original: num.value, type: num.type,
+          numeric: num.numericValue, newValue: '',
+        });
+      });
+    }
+  }
+
+  const charts = await chartPartsBySlide(zip, slideNames);
+  for (const [partName, slideNo] of Object.entries(charts)) {
+    const doc = parseXml(await zip.file(partName).async('string'));
+    const sers = doc.getElementsByTagNameNS(NS.c, 'ser');
+    for (let s = 0; s < sers.length; s++) {
+      const name = seriesNameOf(sers[s]) || `Series ${s + 1}`;
+      const valEls = sers[s].getElementsByTagNameNS(NS.c, 'val');
+      if (!valEls.length) continue;
+      const vs = valEls[0].getElementsByTagNameNS(NS.c, 'v');
+      for (let k = 0; k < vs.length; k++) {
+        entries.push({
+          id: id++, part: partName, kind: 'chart', serIdx: s, vIdx: k,
+          slide: slideNo, context: `chart series "${name}" · point ${k + 1}`,
+          original: vs[k].textContent, type: 'chart_value',
+          numeric: parseFloat(vs[k].textContent), newValue: '',
+        });
+      }
+    }
+  }
+
+  return { slideCount: slideNames.length, entries };
+}
+
+async function applyUpdates(file, entries) {
+  const pending = entries.filter((e) => String(e.newValue).trim() !== '');
+  if (!pending.length) throw new Error('No new values entered — fill in at least one before applying.');
+
+  const zip = await JSZip.loadAsync(file);
+  const byPart = {};
+  pending.forEach((e) => { (byPart[e.part] = byPart[e.part] || []).push(e); });
+
+  for (const [partName, partEntries] of Object.entries(byPart)) {
+    const raw = await zip.file(partName).async('string');
+    const decl = (raw.match(/^<\?xml[^>]*\?>\s*/) || [''])[0];
+    const doc = parseXml(raw);
+
+    const textEntries = partEntries.filter((e) => e.kind === 'text');
+    if (textEntries.length) {
+      const ts = doc.getElementsByTagNameNS(NS.a, 't');
+      const byNode = {};
+      textEntries.forEach((e) => { (byNode[e.nodeIdx] = byNode[e.nodeIdx] || []).push(e); });
+
+      for (const [nodeIdx, nodeEntries] of Object.entries(byNode)) {
+        const node = ts[Number(nodeIdx)];
+        if (!node) continue;
+        let txt = node.textContent;
+        const matches = extractNumbers(txt);
+        // Replace right-to-left so earlier offsets stay valid.
+        nodeEntries
+          .slice()
+          .sort((a, b) => b.matchIdx - a.matchIdx)
+          .forEach((e) => {
+            const m = matches[e.matchIdx];
+            if (!m || m.value !== e.original) return;
+            const replacement = renderReplacement(e.newValue, e.original);
+            if (replacement == null) return;
+            txt = txt.slice(0, m.start) + replacement + txt.slice(m.end);
+          });
+        node.textContent = txt;
+      }
+    }
+
+    const chartEntries = partEntries.filter((e) => e.kind === 'chart');
+    if (chartEntries.length) {
+      const sers = doc.getElementsByTagNameNS(NS.c, 'ser');
+      chartEntries.forEach((e) => {
+        const ser = sers[e.serIdx];
+        if (!ser) return;
+        const valEls = ser.getElementsByTagNameNS(NS.c, 'val');
+        if (!valEls.length) return;
+        const vs = valEls[0].getElementsByTagNameNS(NS.c, 'v');
+        const node = vs[e.vIdx];
+        if (!node) return;
+        const n = parseNumber(String(e.newValue));
+        if (n != null) node.textContent = String(n);
+      });
+    }
+
+    // XMLSerializer may or may not emit the declaration depending on the
+    // engine; emitting a second one produces malformed XML that PowerPoint
+    // refuses to open, so only prepend when it is genuinely absent.
+    const serialized = new XMLSerializer().serializeToString(doc);
+    zip.file(partName, /^\s*<\?xml/.test(serialized) ? serialized : decl + serialized);
+  }
+
+  const blob = await zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    compression: 'DEFLATE',
+  });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (file.name || 'deck').replace(/\.pptx$/i, '') + '-updated.pptx';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+  return pending.length;
+}
+
+let updFileRef = null;
+let updEntries = [];
+
+function renderNumbers() {
+  const panel = $('numbersPanel');
+  panel.innerHTML = '';
+  if (!updEntries.length) return;
+
+  const bySlide = {};
+  updEntries.forEach((e) => { (bySlide[e.slide] = bySlide[e.slide] || []).push(e); });
+
+  Object.keys(bySlide).sort((a, b) => a - b).forEach((slideNo) => {
+    const group = document.createElement('div');
+    group.className = 'slideGroup';
+    const h = document.createElement('h4');
+    h.textContent = `Slide ${slideNo}`;
+    group.appendChild(h);
+
+    bySlide[slideNo].forEach((e) => {
+      const row = document.createElement('div');
+      row.className = 'numRow';
+
+      const ctx = document.createElement('div');
+      ctx.className = 'numCtx';
+      ctx.textContent = e.context;
+      ctx.title = e.context;
+
+      const old = document.createElement('div');
+      old.className = 'numOld';
+      old.textContent = e.original;
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = e.type.replace('_', ' ');
+      old.appendChild(badge);
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'new value';
+      input.value = e.newValue || '';
+      input.addEventListener('input', () => { e.newValue = input.value; });
+
+      row.appendChild(ctx); row.appendChild(old); row.appendChild(input);
+      group.appendChild(row);
+    });
+
+    panel.appendChild(group);
+  });
+}
+
+$('updFile').addEventListener('change', () => {
+  updFileRef = $('updFile').files[0] || null;
+  updEntries = [];
+  renderNumbers();
+  const info = $('updInfo');
+  if (!updFileRef) { info.style.display = 'none'; return; }
+  info.style.display = 'block';
+  info.textContent = `Selected ${updFileRef.name}. Click "Scan for numbers".`;
+  $('aiFillCard').style.display = 'none';
+});
+
+$('scanBtn').addEventListener('click', async () => {
+  if (!updFileRef) return alert('Choose a .pptx file first.');
+  const info = $('updInfo');
+  info.style.display = 'block';
+  info.textContent = 'Scanning...';
+  clearOutput();
+  try {
+    const result = await scanNumbers(updFileRef);
+    updEntries = result.entries;
+    renderNumbers();
+    info.textContent = `Found ${updEntries.length} number(s) across ${result.slideCount} slide(s). Type new values next to the ones you want changed, then click "Apply & download".`;
+    $('aiFillCard').style.display = updEntries.length ? '' : 'none';
+  } catch (err) {
+    info.textContent = 'Error: ' + err.message;
+  }
+});
+
+$('applyBtn').addEventListener('click', async () => {
+  if (!updFileRef) return alert('Choose a .pptx file first.');
+  if (!updEntries.length) return alert('Scan the file first.');
+  clearOutput();
+  try {
+    const count = await applyUpdates(updFileRef, updEntries);
+    appendLog(`Updated ${count} value(s) and downloaded the new file. Original formatting untouched.`, 'ok');
+  } catch (err) {
+    appendLog('Error: ' + err.message, 'err');
+  }
+});
+
+$('exportJsonBtn').addEventListener('click', () => {
+  if (!updEntries.length) return alert('Scan the file first.');
+  const payload = updEntries.map((e) => ({
+    id: e.id, slide: e.slide, context: e.context, type: e.type,
+    original: e.original, numeric: e.numeric, newValue: e.newValue || '',
+  }));
+  const blob = new Blob([JSON.stringify({ numbers: payload }, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'deck-numbers.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+});
+
+$('importJsonBtn').addEventListener('click', () => $('importJsonFile').click());
+$('importJsonFile').addEventListener('change', async () => {
+  const f = $('importJsonFile').files[0];
+  if (!f) return;
+  try {
+    const parsed = JSON.parse(await f.text());
+    const rows = parsed.numbers || parsed;
+    const byId = {};
+    rows.forEach((r) => { byId[r.id] = r.newValue; });
+    let applied = 0;
+    updEntries.forEach((e) => {
+      if (byId[e.id] !== undefined && String(byId[e.id]).trim() !== '') { e.newValue = byId[e.id]; applied++; }
+    });
+    renderNumbers();
+    $('updInfo').textContent = `Imported ${applied} new value(s) from JSON.`;
+  } catch (err) {
+    alert('Could not read that JSON: ' + err.message);
+  }
+  $('importJsonFile').value = '';
+});
+
+$('aiFillBtn').addEventListener('click', async () => {
+  const apiKey = apiKeyEl.value.trim();
+  const model = modelEl.value.trim() || 'gemini-3.5-flash';
+  const newData = $('newDataText').value.trim();
+  if (!apiKey) return alert('Paste your Gemini API key first.');
+  if (!updEntries.length) return alert('Scan the file first.');
+  if (!newData) return alert('Paste the new figures first.');
+
+  const btn = $('aiFillBtn');
+  btn.disabled = true;
+  clearOutput();
+  appendLog('Asking Gemini to map your new figures onto the existing numbers...');
+
+  const list = updEntries.map((e) => `id=${e.id} slide=${e.slide} type=${e.type} current="${e.original}" context="${e.context.slice(0, 120)}"`).join('\n');
+  const sys = `You map new figures onto the existing numbers of a slide deck.
+Rules:
+- Only assign a new value where the new figures clearly correspond to that existing number. Leave everything else out entirely — a wrong mapping is much worse than no mapping.
+- Give the bare new number only (no currency symbols, no % sign, no thousands separators) — formatting is reapplied automatically from the original.
+- Never invent figures that are not in the user's new data.
+Output ONLY a JSON object, no prose, no code fence:
+{"updates":[{"id":<number>,"newValue":"<bare number>"}]}`;
+
+  try {
+    const { text } = await callGemini({ apiKey, model, systemPrompt: sys, userText: `EXISTING NUMBERS:\n${list}\n\nNEW FIGURES:\n${newData}` });
+    const jsonText = (text.match(/\{[\s\S]*\}/) || [null])[0];
+    if (!jsonText) { appendLog('No JSON returned. Raw response:', 'err'); appendLog(text); return; }
+    const parsed = JSON.parse(jsonText);
+    const byId = {};
+    (parsed.updates || []).forEach((u) => { byId[u.id] = u.newValue; });
+    let applied = 0;
+    updEntries.forEach((e) => {
+      if (byId[e.id] !== undefined && String(byId[e.id]).trim() !== '') { e.newValue = byId[e.id]; applied++; }
+    });
+    renderNumbers();
+    appendLog(`Filled ${applied} value(s). Review them, then click "Apply & download".`, 'ok');
+  } catch (err) {
+    appendLog('Error: ' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 let lastExtract = null;
 

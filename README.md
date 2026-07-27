@@ -85,7 +85,7 @@ less consistent than Claude on complex/unusual layouts. If a build comes
 out wrong, rephrasing the request or just clicking **Build deck** again
 often fixes it. One slide at a time is the most reliable.
 
-### The two modes
+### The three modes
 
 **Build a new deck** — describe slides in plain English, get a `.pptx`.
 
@@ -112,6 +112,36 @@ Charts are re-created as native pptxgenjs charts from the extracted
 values, so they stay editable. Images, speaker notes, animations and
 custom shapes in the source deck are **not** carried over — this reads
 content, not pixel-perfect structure.
+
+**Update numbers** — refresh last period's deck with this period's figures,
+keeping the original design completely intact. Unlike *Reformat*, this does
+not regenerate anything: it opens your `.pptx` (a zip), patches only the
+text nodes whose numbers you changed, and re-zips. Every font, colour,
+image, animation, master and layout survives byte-for-byte; slides you
+don't touch stay byte-identical.
+
+- **Scan for numbers** lists every number it finds, grouped by slide, with
+  the surrounding text as context and a type tag (currency, percentage,
+  number, negative in parens, chart value).
+- Type new values next to the ones you want changed. **Formatting is
+  reapplied from the original**, so entering `41` against `30%` yields
+  `41%`, against `1,234` yields `5,678` (commas kept), against `$1,234.56`
+  yields `$9,876.50` (symbol and 2dp kept), and against `(123)` yields
+  `(45)` (parentheses kept).
+- Chart series values are patched in the chart XML, so charts stay native
+  and editable.
+- **Export JSON** / **Import JSON** give the same fill-in-a-template
+  workflow as a script — export, edit in bulk, re-import.
+- **Fill with AI** (optional) takes a paste of this period's figures and
+  maps them onto the existing numbers for you. Only the number list and
+  your pasted text are sent — never the file. Review before applying.
+
+Known limitation: PowerPoint sometimes splits a single number across
+multiple text runs (e.g. `1,` + `234` when part of it was edited
+separately). Numbers split that way aren't detected, since each run is
+scanned independently — that tradeoff is deliberate, because merging runs
+to catch them would discard the per-run formatting this mode exists to
+preserve.
 
 ## Run it as a website with a backend (alternative — has more moving parts)
 
