@@ -19,7 +19,31 @@ You describe a slide (or several), and the agent:
 The brand format (colours, fonts, layout, logo placeholders) is locked into
 the skill, so you never have to re-paste it — just describe the content.
 
-## Setup
+## Windows: one-click app
+
+For Windows, skip the CLI setup below entirely:
+
+1. Install [Node.js](https://nodejs.org) (LTS) if you don't already have it —
+   this is what actually runs the generated deck-building code, so it's
+   needed either way.
+2. Download this project folder and double-click **`run.bat`**.
+3. First launch installs dependencies automatically (~1 minute, one time
+   only). It then asks you to paste your Anthropic API key once — it's saved
+   to `%USERPROFILE%\.deck-sop-agent\config.json` so you're never asked
+   again.
+4. From then on, just type what deck you want at the `Build a deck >`
+   prompt. Finished files land in `%USERPROFILE%\deck-sop-agent\output\`.
+
+No manual `npm install`, no editing `.env` by hand — `run.bat` does both for
+you the first time, then it behaves like a normal desktop app: double-click,
+type your request, get a file back.
+
+*(A fully self-contained single `.exe` with no Node.js requirement is
+possible via `bun build --compile`, but it bundles Anthropic's full Claude
+Code CLI binary and comes out to ~365MB — too large to hand over here. See
+"Building a single-file .exe" below if you want to build that yourself.)*
+
+## Setup (CLI, any OS)
 
 ```bash
 npm install
@@ -70,16 +94,43 @@ Finished `.pptx` files land in `./output/`.
 - `.claude/skills/deck-sop/` — the deck-sop skill (SOP, slide patterns,
   chart cheat sheet), bundled into the repo so it travels with the agent
   instead of depending on a personal Claude Code skills install.
-- `src/build-deck.mjs` — a CLI that calls the Claude Agent SDK's `query()`,
-  enabling only the `deck-sop` skill and the tools it needs (Bash, Read,
-  Write, Edit, Glob, Grep), and streams the agent's progress to your
-  terminal.
+- `src/build-deck.mjs` — a one-shot CLI: `npm run build-deck -- "<prompt>"`,
+  no interactive prompts, good for scripting/automation.
+- `src/app-core.mjs` — the interactive "app" loop (first-run API-key wizard,
+  saved config, `Build a deck >` prompt loop) shared by both desktop entry
+  points below.
+- `src/app.mjs` — plain Node.js entry point used by `run.bat`; reads the
+  skill files off disk and lets the SDK auto-resolve its own native `claude`
+  binary via `npm install`.
+- `src/app.win32.mjs` — entry point for the single-file Windows `.exe` build
+  (see below); statically embeds the skill files and the win32 `claude`
+  binary into the bundle.
+
+All three call the same Claude Agent SDK `query()`, enabling only the
+`deck-sop` skill and the tools it needs (Bash, Read, Write, Edit, Glob,
+Grep).
 
 Because it runs headless with `permissionMode: 'bypassPermissions'`, the
 agent executes shell commands (npm, node, soffice) without prompting for
 approval each time — that's what makes it usable as a one-shot CLI instead
 of an interactive chat. Only run it against prompts you trust, the same way
 you'd treat any automation with shell access.
+
+## Building a single-file .exe (no Node.js required on the target machine)
+
+Requires [Bun](https://bun.sh) on the *build* machine (Bun can cross-compile
+Windows binaries from Linux/macOS — the target machine doesn't need Bun):
+
+```bash
+npm install @anthropic-ai/claude-agent-sdk-win32-x64 --force  # fetches the native win32 claude.exe asset
+bun build --compile --target=bun-windows-x64 src/app.win32.mjs \
+  --outfile deck-sop-agent-windows.exe
+```
+
+The result is one ~365MB `.exe` (mostly Anthropic's own Claude Code CLI
+binary, embedded so nothing else needs installing) with the same first-run
+API-key wizard. Not committed to this repo or distributed here because of
+its size — build it yourself if you want a true zero-dependency binary.
 
 ## Sharing this with others
 
